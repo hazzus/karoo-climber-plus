@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overlay-only extension: no datatypes, no scanning, no map layer in v1 -->
+<ExtensionInfo
+    displayName="@string/extension_name"
+    icon="@drawable/ic_climber"
+    id="karoo-climber" />

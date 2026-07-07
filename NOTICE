@@ -1,0 +1,12 @@
+Climber+ — climb overlay extension for Hammerhead Karoo
+Copyright 2026 hazzus
+
+This product includes color palette definitions adapted from Barberfish
+(https://github.com/jpweytjens/barberfish), licensed under the Apache
+License 2.0.
+
+Built with karoo-ext (https://github.com/hammerheadnav/karoo-ext),
+Copyright Hammerhead, licensed under the Apache License 2.0.
+
+The floating overlay window pattern was inspired by Ki2
+(https://github.com/valterc/ki2) by valterc.
