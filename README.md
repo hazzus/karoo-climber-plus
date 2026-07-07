@@ -20,8 +20,8 @@ extension API. No system modification.
 
 - **Permanent chip** while a route is loaded:
   - `2/5 climbs` — completed / total on route
-  - `in 400 m` — countdown to the next climb
-  - `8% · 1.4 km` — live grade and distance to top while climbing
+  - `in 400` — countdown to the next climb
+  - `8% → 1.4` — live grade and distance to top while climbing
 - **Climb drawer** pops up automatically before each climb (configurable trigger
   distance, default 500 m):
   - elevation profile of the climb, colored by grade in 100 m chunks
@@ -59,13 +59,13 @@ extension API. No system modification.
 
 Climber+ works on Karoo 2 and Karoo 3 (Karoo OS with Extensions support).
 
-1. Download the latest `app-debug.apk` from the releases page (or build it, see
-   below).
+1. Download the latest `karoo-climber-plus.apk` from the
+   [releases page](../../releases) (or build it, see below).
 2. Enable Developer Options + USB debugging on the Karoo
    ([Hammerhead guide](https://support.hammerhead.io/hc/en-us/articles/30696553134363)).
 3. Install:
    ```sh
-   adb install app-debug.apk
+   adb install karoo-climber-plus.apk
    ```
 4. Open **Climber+** from the Karoo launcher and grant the
    **draw over other apps** permission (required for the overlay window).
@@ -94,9 +94,14 @@ Requires JDK 17 and the Android SDK (platform 34). `karoo-ext` resolves via
 JitPack — no GitHub credentials needed.
 
 ```sh
-./gradlew assembleDebug        # apk: app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug        # app/build/outputs/apk/debug/karoo-climber-plus-debug.apk
 ./gradlew testDebugUnitTest    # unit tests (climb math, modes, polyline codec)
 ```
+
+Release builds are signed with a local keystore: copy `keystore.properties`
+(see `app/build.gradle.kts`; not committed) pointing at your own keystore,
+then `./gradlew assembleRelease` produces
+`app/build/outputs/apk/release/karoo-climber-plus.apk`.
 
 ## How it works
 

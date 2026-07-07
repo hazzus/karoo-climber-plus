@@ -235,10 +235,10 @@ class ClimbOverlayView(context: Context) : View(context) {
         val active = s.active
         val text = when {
             active == null -> "${s.completedCount}/${s.totalCount} climbs"
-            active.distanceToStart > 0 -> "in ${formatDistance(active.distanceToStart)}"
+            active.distanceToStart > 0 -> "in ${formatValue(active.distanceToStart)}"
             else -> {
                 val grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%"
-                "$grade · ${formatDistance(active.distanceToTop)}"
+                "$grade → ${formatValue(active.distanceToTop)}"
             }
         }
         chipTextPaint.textSize = height * 0.45f
