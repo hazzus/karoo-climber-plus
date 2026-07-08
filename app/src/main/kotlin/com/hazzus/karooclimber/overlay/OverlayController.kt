@@ -41,7 +41,7 @@ class OverlayController(private val service: ClimberExtension) {
         state: ClimbUiState.Shown,
         settings: Settings,
         imperial: Boolean,
-        sysValues: Map<String, Double>,
+        sysValues: Map<String, Map<String, Double>>,
     ) {
         lastSettings = settings
         if (!AndroidSettings.canDrawOverlays(service)) {

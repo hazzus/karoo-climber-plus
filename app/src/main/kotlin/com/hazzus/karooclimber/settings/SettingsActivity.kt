@@ -16,20 +16,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -46,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.hazzus.karooclimber.palette.GradePalettes
 import kotlinx.coroutines.launch
 
@@ -257,17 +260,104 @@ private fun FieldPickerRow(
     var open by remember { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(label, Modifier.weight(1f))
-        Box {
-            TextButton(onClick = { open = true }) { Text(selected.label) }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                ClimbField.entries.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(option.label) },
-                        onClick = {
-                            open = false
-                            onSelect(option)
-                        },
+        TextButton(onClick = { open = true }) {
+            Column(horizontalAlignment = Alignment.End) {
+                Text(selected.label)
+                Text(
+                    selected.category.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+    if (open) {
+        FieldPickerDialog(
+            selected = selected,
+            onDismiss = { open = false },
+            onSelect = { chosen ->
+                open = false
+                onSelect(chosen)
+            },
+        )
+    }
+}
+
+/** Two-level picker: category list, then the fields of that category. */
+@Composable
+private fun FieldPickerDialog(
+    selected: ClimbField,
+    onDismiss: () -> Unit,
+    onSelect: (ClimbField) -> Unit,
+) {
+    var category by remember { mutableStateOf<FieldCategory?>(null) }
+    val byCategory = remember { ClimbField.entries.groupBy { it.category } }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+                val cat = category
+                if (cat == null) {
+                    Text(
+                        "Category",
+                        Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        style = MaterialTheme.typography.titleMedium,
                     )
+                    HorizontalDivider()
+                    LazyColumn {
+                        items(FieldCategory.entries) { c ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { category = c }
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(c.label)
+                                    if (selected.category == c) {
+                                        Text(
+                                            selected.label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                                Text("›", style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                    }
+                } else {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { category = null }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        Text("‹", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.size(12.dp))
+                        Text(cat.label, style = MaterialTheme.typography.titleMedium)
+                    }
+                    HorizontalDivider()
+                    LazyColumn {
+                        items(byCategory[cat].orEmpty()) { field ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelect(field) },
+                            ) {
+                                RadioButton(
+                                    selected = field == selected,
+                                    onClick = { onSelect(field) },
+                                )
+                                Text(field.label)
+                            }
+                        }
+                    }
                 }
             }
         }

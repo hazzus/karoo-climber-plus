@@ -21,10 +21,14 @@ import com.hazzus.karooclimber.palette.GradePalette
 import com.hazzus.karooclimber.palette.GradePalettes
 import com.hazzus.karooclimber.settings.BaseMode
 import com.hazzus.karooclimber.settings.ClimbField
+import com.hazzus.karooclimber.settings.FieldFormat
 import com.hazzus.karooclimber.settings.OverlayAnchor
 import com.hazzus.karooclimber.settings.Settings
+import io.hammerhead.karooext.models.DataType
+import java.util.Calendar
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Canvas-drawn climb overlay with three sizes:
@@ -47,7 +51,7 @@ class ClimbOverlayView(context: Context) : View(context) {
     private var imperial: Boolean = false
     private var activeKey: Pair<Double, Double>? = null
     private var listScrollPx = 0f
-    private var sysValues: Map<String, Double> = emptyMap()
+    private var sysValues: Map<String, Map<String, Double>> = emptyMap()
 
     /** Controller hook: window size must change. */
     var onRelayoutNeeded: (() -> Unit)? = null
@@ -153,7 +157,7 @@ class ClimbOverlayView(context: Context) : View(context) {
         newState: ClimbUiState.Shown,
         newSettings: Settings,
         isImperial: Boolean = imperial,
-        newSysValues: Map<String, Double> = sysValues,
+        newSysValues: Map<String, Map<String, Double>> = sysValues,
     ) {
         val newKey = newState.active?.climb?.let { it.startDistance to it.endDistance }
         if (newKey != activeKey) {
@@ -563,9 +567,7 @@ class ClimbOverlayView(context: Context) : View(context) {
             canvas.drawRoundRect(cell, CELL_CORNER, CELL_CORNER, cellPaint)
 
             val pad = cellW * 0.05f
-            subTextPaint.textSize = cellH * 0.22f
-            subTextPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText(fields[i].label, cell.right - pad, cell.top + cellH * 0.3f, subTextPaint)
+            drawCellLabel(canvas, fields[i].cellLabel, cell, cellH, pad)
 
             textPaint.textSize = cellH * 0.45f
             textPaint.textAlign = Paint.Align.RIGHT
@@ -576,6 +578,50 @@ class ClimbOverlayView(context: Context) : View(context) {
                 textPaint,
             )
         }
+    }
+
+    /** Cell label, wrapped onto a second line (and shrunk) when it doesn't fit. */
+    private fun drawCellLabel(canvas: Canvas, label: String, cell: RectF, cellH: Float, pad: Float) {
+        val maxW = cell.width() - 2 * pad
+        subTextPaint.textAlign = Paint.Align.RIGHT
+        subTextPaint.textSize = cellH * 0.22f
+        if (subTextPaint.measureText(label) <= maxW) {
+            canvas.drawText(label, cell.right - pad, cell.top + cellH * 0.3f, subTextPaint)
+            return
+        }
+        subTextPaint.textSize = cellH * 0.18f
+        val lines = wrapLabel(label)
+        while (lines.any { subTextPaint.measureText(it) > maxW } &&
+            subTextPaint.textSize > cellH * 0.1f
+        ) {
+            subTextPaint.textSize *= 0.92f
+        }
+        canvas.drawText(lines[0], cell.right - pad, cell.top + cellH * 0.24f, subTextPaint)
+        lines.getOrNull(1)?.let {
+            canvas.drawText(it, cell.right - pad, cell.top + cellH * 0.45f, subTextPaint)
+        }
+    }
+
+    /** Split a label at the space that best balances the two line widths. */
+    private fun wrapLabel(label: String): List<String> {
+        val words = label.split(' ')
+        if (words.size < 2) return listOf(label)
+        var best = 1
+        var bestWidth = Float.MAX_VALUE
+        for (i in 1 until words.size) {
+            val width = maxOf(
+                subTextPaint.measureText(words.take(i).joinToString(" ")),
+                subTextPaint.measureText(words.drop(i).joinToString(" ")),
+            )
+            if (width < bestWidth) {
+                bestWidth = width
+                best = i
+            }
+        }
+        return listOf(
+            words.take(best).joinToString(" "),
+            words.drop(best).joinToString(" "),
+        )
     }
 
     private fun fieldValue(
@@ -592,18 +638,67 @@ class ClimbOverlayView(context: Context) : View(context) {
         else -> field.dataTypeId?.let { sysFieldValue(field, sysValues[it]) } ?: "--"
     }
 
-    /** System stream values arrive in SI units; format per field type. */
-    private fun sysFieldValue(field: ClimbField, raw: Double?): String {
-        raw ?: return "--"
-        return when (field) {
-            ClimbField.SPEED, ClimbField.AVG_SPEED ->
-                "%.1f".format(raw * if (imperial) 2.23694 else 3.6) // m/s -> mph / km/h
-            ClimbField.POWER, ClimbField.POWER_3S, ClimbField.HEART_RATE, ClimbField.CADENCE ->
-                "${raw.toInt()}"
-            ClimbField.ASCENT -> formatElevationValue(raw)
-            ClimbField.DISTANCE -> formatValue(raw)
-            else -> "%.1f".format(raw)
+    /** System stream values arrive in SI units; format per field format kind. */
+    private fun sysFieldValue(field: ClimbField, values: Map<String, Double>?): String {
+        values ?: return "--"
+        if (field.format == FieldFormat.GEARS) {
+            val front: Int?
+            val rear: Int?
+            if (field.extraDataTypeId != null) {
+                // combined from two single-value streams (Ki2 front + rear)
+                front = singleValue(values)?.toInt()
+                rear = sysValues[field.extraDataTypeId]?.let { singleValue(it) }?.toInt()
+            } else {
+                // multi-field Karoo shifting stream
+                front = values[DataType.Field.SHIFTING_FRONT_GEAR]?.toInt()
+                rear = values[DataType.Field.SHIFTING_REAR_GEAR]?.toInt()
+            }
+            return when {
+                front != null && rear != null -> "$front-$rear"
+                else -> (front ?: rear)?.toString() ?: "--"
+            }
         }
+        val raw = singleValue(values) ?: return "--"
+        return when (field.format) {
+            FieldFormat.SPEED ->
+                "%.1f".format(raw * if (imperial) 2.23694 else 3.6) // m/s -> mph / km/h
+            FieldFormat.VERTICAL_SPEED ->
+                "${(raw * 3600 * if (imperial) 3.28084 else 1.0).roundToInt()}" // m/s -> m/h VAM
+            FieldFormat.DISTANCE -> formatValue(raw)
+            FieldFormat.ELEVATION -> formatElevationValue(raw)
+            FieldFormat.INTEGER, FieldFormat.PERCENT -> "${raw.roundToInt()}"
+            FieldFormat.NUMBER -> "%.1f".format(raw)
+            FieldFormat.NUMBER2 -> "%.2f".format(raw)
+            FieldFormat.DURATION -> formatDuration(raw)
+            FieldFormat.CLOCK -> formatClock(raw)
+            FieldFormat.TEMPERATURE ->
+                "%.1f".format(if (imperial) raw * 1.8 + 32 else raw)
+            FieldFormat.PRESSURE ->
+                // pascals -> bar / psi
+                if (imperial) "${(raw / 6894.757).roundToInt()}" else "%.1f".format(raw / 100_000)
+            FieldFormat.GEARS, FieldFormat.DERIVED -> "--" // handled elsewhere
+        }
+    }
+
+    private fun singleValue(values: Map<String, Double>): Double? =
+        values[DataType.Field.SINGLE] ?: values.values.firstOrNull()
+
+    private fun formatDuration(rawSeconds: Double): String {
+        // some firmware streams report milliseconds; nothing rides for 3 days
+        val seconds = if (abs(rawSeconds) > 3 * 86_400) rawSeconds / 1000 else rawSeconds
+        val total = abs(seconds).toLong()
+        val h = total / 3600
+        val m = total % 3600 / 60
+        val s = total % 60
+        val body = if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+        return if (seconds < 0) "-$body" else body
+    }
+
+    private fun formatClock(raw: Double): String {
+        // epoch seconds vs milliseconds
+        val millis = if (raw > 1e11) raw.toLong() else (raw * 1000).toLong()
+        val cal = Calendar.getInstance().apply { timeInMillis = millis }
+        return "%d:%02d".format(cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
     }
 
     // ------------------------------------------------------------ climbs list

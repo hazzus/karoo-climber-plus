@@ -48,8 +48,8 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
     private val demoProgress = MutableStateFlow(0.0)
     private val consumerIds = mutableListOf<String>()
 
-    /** Latest values of streamed system data types (keyed by dataTypeId). */
-    private val sysValues = MutableStateFlow<Map<String, Double>>(emptyMap())
+    /** Latest field values of streamed system data types (keyed by dataTypeId). */
+    private val sysValues = MutableStateFlow<Map<String, Map<String, Double>>>(emptyMap())
     private val sysConsumers = mutableMapOf<String, String>() // dataTypeId -> consumerId
 
     override fun onCreate() {
@@ -95,7 +95,11 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         // Stream the system data types configured as full-view fields.
         scope.launch {
             settingsRepo.settings.collect { settings ->
-                reconcileSysStreams(settings.fullFields.mapNotNull { it.dataTypeId }.toSet())
+                reconcileSysStreams(
+                    settings.fullFields
+                        .flatMap { listOfNotNull(it.dataTypeId, it.extraDataTypeId) }
+                        .toSet(),
+                )
             }
         }
 
@@ -146,9 +150,9 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
             sysConsumers[typeId] = karooSystem.addConsumer<OnStreamState>(
                 OnStreamState.StartStreaming(typeId),
             ) { event ->
-                val value = (event.state as? StreamState.Streaming)?.dataPoint?.singleValue
-                sysValues.value = if (value != null) {
-                    sysValues.value + (typeId to value)
+                val values = (event.state as? StreamState.Streaming)?.dataPoint?.values
+                sysValues.value = if (!values.isNullOrEmpty()) {
+                    sysValues.value + (typeId to values)
                 } else {
                     sysValues.value - typeId
                 }
