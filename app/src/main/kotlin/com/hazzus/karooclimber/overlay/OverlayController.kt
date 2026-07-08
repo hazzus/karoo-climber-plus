@@ -35,6 +35,7 @@ class OverlayController(private val service: ClimberExtension) {
     private var view: ClimbOverlayView? = null
     private var permissionNotified = false
     private var lastSettings: Settings? = null
+    private var appliedParams: WindowManager.LayoutParams? = null
 
     val isShowing: Boolean get() = view != null
 
@@ -57,14 +58,16 @@ class OverlayController(private val service: ClimberExtension) {
             view = created
             // no relayout hook yet: the view is not attached to the window manager
             created.update(state, settings, imperial, sysValues)
-            windowManager.addView(created, layoutParams(created, settings))
+            val params = layoutParams(created, settings)
+            windowManager.addView(created, params)
+            appliedParams = params
             created.onRelayoutNeeded = { lastSettings?.let { relayout(it) } }
             created.onHardwareKeyPassthrough = { keyCode ->
                 hardwareActionFor(keyCode)?.let { service.karooSystem.dispatch(it) }
             }
         } else {
             current.update(state, settings, imperial, sysValues)
-            windowManager.updateViewLayout(current, layoutParams(current, settings))
+            applyLayoutIfChanged(current, settings)
         }
     }
 
@@ -73,6 +76,7 @@ class OverlayController(private val service: ClimberExtension) {
             runCatching { windowManager.removeView(it) }
             view = null
         }
+        appliedParams = null
         service.stopForeground(Service.STOP_FOREGROUND_REMOVE)
     }
 
@@ -80,7 +84,23 @@ class OverlayController(private val service: ClimberExtension) {
     fun relayout(settings: Settings) {
         val v = view ?: return
         if (!v.isAttachedToWindow) return
-        windowManager.updateViewLayout(v, layoutParams(v, settings))
+        applyLayoutIfChanged(v, settings)
+    }
+
+    /** Relayouts through WindowManager are costly — skip when nothing changed. */
+    private fun applyLayoutIfChanged(v: ClimbOverlayView, settings: Settings) {
+        val params = layoutParams(v, settings)
+        val last = appliedParams
+        if (last != null &&
+            last.width == params.width && last.height == params.height &&
+            last.flags == params.flags && last.gravity == params.gravity &&
+            last.x == params.x && last.y == params.y &&
+            last.alpha == params.alpha
+        ) {
+            return
+        }
+        windowManager.updateViewLayout(v, params)
+        appliedParams = params
     }
 
     private fun layoutParams(v: ClimbOverlayView, settings: Settings): WindowManager.LayoutParams {
