@@ -12,9 +12,9 @@ display modes, preview windows and data fields.
 Built on the official [karoo-ext](https://github.com/hammerheadnav/karoo-ext)
 extension API. No system modification.
 
-| Drawer (approaching) | Drawer (climbing) | Full screen |
-|---|---|---|
-| ![](docs/img/drawer-approach.png) | ![](docs/img/drawer-climbing.png) | ![](docs/img/full-view.png) |
+| Chip (climbing) | Drawer (approaching) | Drawer (climbing) | Climbs list | Full screen |
+|---|---|---|---|---|
+| ![](docs/img/chip-climb.png) | ![](docs/img/drawer-approach.png) | ![](docs/img/drawer-climbing.png) | ![](docs/img/climb-list.png) | ![](docs/img/full-view.png) |
 
 ## Features
 
