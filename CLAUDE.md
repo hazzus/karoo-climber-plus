@@ -82,7 +82,9 @@ Data flows one way: karoo-ext events → repos → pure engine → overlay windo
 ## Conventions / gotchas
 
 - UI text on the overlay is unitless by design (native-Climber parity): distances as
-  `1.4` (km) or `400` (m), grades bare numbers, arrows (`→`, `↗`) instead of unit labels.
+  `1.4` (km) or `400` (m), grades bare numbers, Hammerhead glyphs (`ic_dist_to`,
+  `ic_elev_gain`, `ic_done` vector drawables) instead of unit labels. Overlay text
+  uses the Karoo's native IBM Plex Sans loaded from `/system/fonts`.
 - `OverlayController.show()` must not trigger `updateViewLayout` before `addView` —
   the relayout hook is attached only after the window exists (past crash).
 - WindowManager calls are main-thread; the extension scope runs on

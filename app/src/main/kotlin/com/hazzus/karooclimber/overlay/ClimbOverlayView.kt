@@ -7,9 +7,12 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
+import com.hazzus.karooclimber.R
 import com.hazzus.karooclimber.data.ClimbData
 import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.data.ElevationProfile
@@ -190,6 +193,13 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- drawing
 
+    // Karoo's native data-field font (IBM Plex Sans Condensed, shipped in
+    // /system/fonts), used for all overlay text at its single Medium weight.
+    // Null on other devices -> Paint falls back to the default typeface.
+    private val plexCondensed: Typeface? = runCatching {
+        Typeface.createFromFile("/system/fonts/IBMPlexSansCondensed-Medium.otf")
+    }.getOrNull()
+
     private val panelBgPaint = Paint().apply { color = Color.BLACK }
     private val approachBgPaint = Paint().apply { color = 0xFF383838.toInt() }
     private val chipBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xF0121212.toInt() }
@@ -201,18 +211,44 @@ class ClimbOverlayView(context: Context) : View(context) {
     private val markerCenterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
+        typeface = plexCondensed
     }
     private val subTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFDCE8F5.toInt()
+        typeface = plexCondensed
     }
     private val rowTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFF111111.toInt()
+        typeface = plexCondensed
     }
-    private val chipTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val chipTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        typeface = plexCondensed
+    }
     private val splicePaint = Paint().apply {
         color = 0x40000000
         strokeWidth = 2f
     }
+
+    // Hammerhead glyphs replacing the → / ↗ text arrows (white fill baked in)
+    private val distToIcon: Drawable? = context.getDrawable(R.drawable.ic_dist_to)
+    private val elevGainIcon: Drawable? = context.getDrawable(R.drawable.ic_elev_gain)
+    private val doneIcon: Drawable? = context.getDrawable(R.drawable.ic_done)
+
+    /**
+     * Draws [icon] with its bottom on the text [baseline], scaled to [size] height.
+     * Returns the drawn width (0 if the icon failed to load).
+     */
+    private fun drawIcon(canvas: Canvas, icon: Drawable?, x: Float, baseline: Float, size: Float): Float {
+        icon ?: return 0f
+        val w = size * icon.intrinsicWidth / icon.intrinsicHeight
+        icon.setBounds(x.toInt(), (baseline - size).toInt(), (x + w).toInt(), baseline.toInt())
+        icon.draw(canvas)
+        return w
+    }
+
+    private fun iconWidth(icon: Drawable?, size: Float): Float =
+        if (icon == null) 0f else size * icon.intrinsicWidth / icon.intrinsicHeight
 
     override fun onDraw(canvas: Canvas) {
         val s = state ?: return
@@ -233,22 +269,34 @@ class ClimbOverlayView(context: Context) : View(context) {
         val r = height / 2f
         canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), r, r, chipBgPaint)
         val active = s.active
-        val text = when {
-            active == null -> "${s.completedCount}/${s.totalCount} climbs"
-            active.distanceToStart > 0 -> "in ${formatValue(active.distanceToStart)}"
-            else -> {
-                val grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%"
-                "$grade → ${formatValue(active.distanceToTop)}"
-            }
-        }
         chipTextPaint.textSize = height * 0.45f
+        val baseline = height / 2f - (chipTextPaint.ascent() + chipTextPaint.descent()) / 2f
+
+        if (active != null && active.distanceToStart <= 0) {
+            // grade [dist-to icon] distance-to-top; icon 3/4 of the digits'
+            // visible height, bottom on the baseline (same as the header)
+            val grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%"
+            val dist = formatValue(active.distanceToTop)
+            val iconH = chipTextPaint.textSize * 0.54f
+            val gap = chipTextPaint.textSize * 0.3f
+            chipTextPaint.textAlign = Paint.Align.LEFT
+            val total = chipTextPaint.measureText(grade) + gap +
+                iconWidth(distToIcon, iconH) + gap + chipTextPaint.measureText(dist)
+            var x = (width - total) / 2f
+            canvas.drawText(grade, x, baseline, chipTextPaint)
+            x += chipTextPaint.measureText(grade) + gap
+            x += drawIcon(canvas, distToIcon, x, baseline, iconH) + gap
+            canvas.drawText(dist, x, baseline, chipTextPaint)
+            return
+        }
+
+        val text = if (active == null) {
+            "${s.completedCount}/${s.totalCount} climbs"
+        } else {
+            "IN ${formatValue(active.distanceToStart)}"
+        }
         chipTextPaint.textAlign = Paint.Align.CENTER
-        canvas.drawText(
-            text,
-            width / 2f,
-            height / 2f - (chipTextPaint.ascent() + chipTextPaint.descent()) / 2f,
-            chipTextPaint,
-        )
+        canvas.drawText(text, width / 2f, baseline, chipTextPaint)
     }
 
     // ---------------------------------------------------------- climb profile
@@ -266,7 +314,7 @@ class ClimbOverlayView(context: Context) : View(context) {
         }
 
         val pad = width * 0.02f
-        val headerH = height * if (withFields) 0.12f else 0.22f
+        val headerH = height * if (withFields) 0.12f else 0.15f
         drawHeader(canvas, s, active, pad, headerH)
 
         val stripH = height * if (withFields) 0.08f else 0.14f
@@ -329,7 +377,7 @@ class ClimbOverlayView(context: Context) : View(context) {
 
         val gap = area.width() * 0.008f
         val cellW = (area.width() - gap * (CHUNK_STRIP_CELLS - 1)) / CHUNK_STRIP_CELLS
-        val textSize = min(area.height() * 0.55f, cellW * 0.32f)
+        val textSize = min(area.height() * 0.78f, cellW * 0.42f)
         rowTextPaint.textSize = textSize
         rowTextPaint.textAlign = Paint.Align.CENTER
 
@@ -352,6 +400,9 @@ class ClimbOverlayView(context: Context) : View(context) {
         }
     }
 
+    /** One font size for every panel header, capped by width so left/right parts never collide. */
+    private fun headerFontSize(headerH: Float): Float = min(headerH * 0.95f, width * 0.08f)
+
     private fun drawHeader(
         canvas: Canvas,
         s: ClimbUiState.Shown,
@@ -359,10 +410,10 @@ class ClimbOverlayView(context: Context) : View(context) {
         pad: Float,
         headerH: Float,
     ) {
-        // cap by width so left/right header parts never collide (e.g. full screen)
-        val big = min(headerH * 0.5f, width * 0.055f)
-        val small = min(headerH * 0.28f, width * 0.035f)
-        val baseline = headerH / 2f + big / 2f
+        val big = headerFontSize(headerH)
+        val small = min(headerH * 0.4f, width * 0.035f)
+        // top-aligned in the header, not vertically centered
+        val baseline = big * 1.05f
 
         textPaint.textSize = big
         textPaint.textAlign = Paint.Align.LEFT
@@ -383,14 +434,23 @@ class ClimbOverlayView(context: Context) : View(context) {
             )
         }
 
-        // unitless values with arrow icons, native style
-        textPaint.textAlign = Paint.Align.RIGHT
-        canvas.drawText(
-            "${formatValue(active.distanceToTop)} →  ${formatElevationValue(active.elevationToTop)} ↗",
-            width - pad,
-            baseline,
-            textPaint,
-        )
+        // unitless values with Hammerhead glyphs, native style; icons are 3/4
+        // of the digits' visible height (cap height ~= 0.72 * font size) and
+        // sit on the text baseline
+        val iconH = big * 0.54f
+        val gap = big * 0.25f
+        val distText = formatValue(active.distanceToTop)
+        val elevText = formatElevationValue(active.elevationToTop)
+        textPaint.textAlign = Paint.Align.LEFT
+        val total = textPaint.measureText(distText) + gap + iconWidth(distToIcon, iconH) +
+            gap * 2.5f + textPaint.measureText(elevText) + gap + iconWidth(elevGainIcon, iconH)
+        var x = width - pad - total
+        canvas.drawText(distText, x, baseline, textPaint)
+        x += textPaint.measureText(distText) + gap
+        x += drawIcon(canvas, distToIcon, x, baseline, iconH) + gap * 2.5f
+        canvas.drawText(elevText, x, baseline, textPaint)
+        x += textPaint.measureText(elevText) + gap
+        drawIcon(canvas, elevGainIcon, x, baseline, iconH)
     }
 
     /** Silhouette path for the current window; rebuilt only when the window moves. */
@@ -541,15 +601,17 @@ class ClimbOverlayView(context: Context) : View(context) {
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), panelBgPaint)
 
         val pad = width * 0.02f
-        val headerH = height * if (scrollable) 0.1f else 0.22f
-        val baseline = headerH * 0.62f
-        textPaint.textSize = min(headerH * 0.5f, width * 0.05f)
+        val headerH = height * if (scrollable) 0.1f else 0.15f
+        // same style as the climb-panel header: top-aligned
+        val big = headerFontSize(headerH)
+        val baseline = big * 1.05f
+        textPaint.textSize = big
         textPaint.textAlign = Paint.Align.LEFT
         canvas.drawText("CLIMBS ${s.completedCount}/${s.totalCount}", pad, baseline, textPaint)
         s.upcoming.firstOrNull()?.let { next ->
             textPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText(
-                "next in ${formatDistance(next.startDistance - s.progress)}",
+                "NEXT IN ${formatValue(next.startDistance - s.progress)}",
                 width - pad,
                 baseline,
                 textPaint,
@@ -570,10 +632,11 @@ class ClimbOverlayView(context: Context) : View(context) {
 
         canvas.save()
         canvas.clipRect(0f, listTop, width.toFloat(), height - pad)
+        val rowPad = width * 0.045f
         var y = listTop - if (scrollable) listScrollPx else 0f
         for (climb in rows) {
             if (y + rowH > listTop && y < height) {
-                drawClimbRow(canvas, s, climb, RectF(pad, y, width - pad, y + rowH))
+                drawClimbRow(canvas, s, climb, RectF(rowPad, y, width - rowPad, y + rowH))
             }
             y += rowH + gap
         }
@@ -588,21 +651,26 @@ class ClimbOverlayView(context: Context) : View(context) {
         rowPaint.color = if (done) 0xFF4A4A4A.toInt() else palette.colorFor(climb.avgGrade)
         canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, rowPaint)
 
-        rowTextPaint.textSize = rect.height() * 0.4f
+        rowTextPaint.textSize = rect.height() * 0.55f
+        rowTextPaint.textAlign = Paint.Align.CENTER
         val cy = rect.centerY() - (rowTextPaint.ascent() + rowTextPaint.descent()) / 2f
         val colW = rect.width() / 3f
         // unitless: to-start always in km (0.7), length in km, grade in %
-        val toStart = when {
-            done -> "done"
-            s.progress >= climb.startDistance -> "now"
-            else -> formatKm(climb.startDistance - s.progress)
+        if (done) {
+            // bottom-aligned with the row text baseline, like the header icons
+            val iconH = rect.height() * 0.42f
+            val iconW = iconWidth(doneIcon, iconH)
+            drawIcon(canvas, doneIcon, rect.left + colW * 0.5f - iconW / 2f, cy, iconH)
+        } else {
+            val toStart = if (s.progress >= climb.startDistance) {
+                "now"
+            } else {
+                formatKm(climb.startDistance - s.progress)
+            }
+            canvas.drawText(toStart, rect.left + colW * 0.5f, cy, rowTextPaint)
         }
-        rowTextPaint.textAlign = Paint.Align.LEFT
-        canvas.drawText(toStart, rect.left + colW * 0.08f, cy, rowTextPaint)
-        rowTextPaint.textAlign = Paint.Align.CENTER
         canvas.drawText(formatKm(climb.length), rect.left + colW * 1.5f, cy, rowTextPaint)
-        rowTextPaint.textAlign = Paint.Align.RIGHT
-        canvas.drawText("%.1f".format(climb.avgGrade), rect.right - colW * 0.08f, cy, rowTextPaint)
+        canvas.drawText("%.1f".format(climb.avgGrade), rect.left + colW * 2.5f, cy, rowTextPaint)
 
         // column splices
         val inset = rect.height() * 0.2f

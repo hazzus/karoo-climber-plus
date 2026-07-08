@@ -16,24 +16,46 @@ extension API. No system modification.
 |---|---|---|---|---|
 | ![](docs/img/chip-climb.png) | ![](docs/img/drawer-approach.png) | ![](docs/img/drawer-climbing.png) | ![](docs/img/climb-list.png) | ![](docs/img/full-view.png) |
 
+## What's different from the native Climber
+
+Climber+ mirrors the native look — Hammerhead's own icon glyphs and the
+Karoo's IBM Plex Sans Condensed font — but goes further where it counts:
+
+- **Display modes.** Tap the profile to cycle views: the full climb with the
+  completed part shaded, the remaining part only, or zoomed preview windows
+  (next 2 / 5 / 10 km, configurable). The native Climber has a single fixed
+  view.
+- **Smooth next-100 m tiles.** The five grade tiles ahead are recalculated
+  from your exact position on every update, so they slide with you
+  continuously. Native chunks are snapped to a fixed 100 m grid, so values
+  jump at each chunk border.
+- **Floating overlay.** Lives on top of any ride page (position, height and
+  opacity are configurable) instead of being its own page.
+- Plus: 6 grade palettes, configurable data fields, configurable trigger
+  distance, a climbs list, and a demo mode.
+
 ## Features
 
 - **Permanent chip** while a route is loaded:
   - `2/5 climbs` — completed / total on route
-  - `in 400` — countdown to the next climb
-  - `8% → 1.4` — live grade and distance to top while climbing
+  - `IN 400` — countdown to the next climb
+  - `8% ⇢ 1.4` — live grade and distance to top while climbing (with the
+    Hammerhead route-to glyph in between)
 - **Climb drawer** pops up automatically before each climb (configurable trigger
   distance, default 500 m):
   - elevation profile of the climb, colored by grade in 100 m chunks
   - approach progress bar: the background fills as you close in on the start
-  - distance to top and elevation to top
+  - distance to top and elevation to top, marked with the native Hammerhead
+    glyphs instead of unit labels
   - **next-500 m strip**: five 100 m tiles with the exact grades ahead of you,
-    with the matching section highlighted on the profile
+    with the matching section highlighted on the profile — sliding smoothly
+    from your position, not snapped to a fixed grid
 - **Full-screen view** (swipe up): profile + four **configurable data fields** —
   climb metrics (dist/elev to top, climb x/y, current/avg grade, length) or live
   system data (speed, power, 3s power, HR, cadence, ascent, distance)
 - **Climbs list**: the next 3 climbs in the drawer, the full scrollable list in
-  full screen — to start / length / avg grade, rows colored by grade
+  full screen — to start / length / avg grade, rows colored by grade, finished
+  climbs ticked off with a checkmark
 - **Display modes**, cycled by tapping the profile:
   - full climb (completed part shaded)
   - remaining part only

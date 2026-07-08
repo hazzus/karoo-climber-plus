@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hammerhead checkmark glyph; source path offset by (281, 8) on the sheet.
+     Fill matches rowTextPaint (dark on colored rows). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="30.43dp"
+    android:height="22.92dp"
+    android:viewportWidth="30.43"
+    android:viewportHeight="22.92">
+    <group
+        android:translateX="-281"
+        android:translateY="-8">
+        <path
+            android:fillColor="#FF111111"
+            android:fillType="evenOdd"
+            android:pathData="M309.268 8L291.286 26.609L283.186 17.9753L281 20.0257L291.29 30.9183L311.424 10.0838L309.268 8Z" />
+    </group>
+</vector>

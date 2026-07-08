@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hammerhead "elevation gain" glyph; source path offset by (281, 789.646) on the sheet. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="29.97dp"
+    android:height="28.28dp"
+    android:viewportWidth="29.97"
+    android:viewportHeight="28.28">
+    <group
+        android:translateX="-281"
+        android:translateY="-789.64">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M310.039 793.64L298.837 789.646L297.972 792.25L304.764 794.672L292.354 800.724L292.359 800.733L281 806.261V809.249L293.536 803.147L293.57 803.217L305.976 797.167L303.799 804.304L307.91 801.362L310.039 793.64ZM310.97 817.919H281V814.931L294.986 807.961L301.979 811.944L310.97 804.974V817.919Z" />
+    </group>
+</vector>
