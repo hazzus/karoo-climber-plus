@@ -18,6 +18,7 @@ import com.hazzus.karooclimber.settings.OverlayAnchor
 import com.hazzus.karooclimber.settings.Settings
 import io.hammerhead.karooext.models.PerformHardwareAction
 import io.hammerhead.karooext.models.SystemNotification
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * Owns the floating overlay window (ki2 pattern): SYSTEM_ALERT_WINDOW permission
@@ -36,8 +37,16 @@ class OverlayController(private val service: ClimberExtension) {
     private var permissionNotified = false
     private var lastSettings: Settings? = null
     private var appliedParams: WindowManager.LayoutParams? = null
+    private var lastHasActive = false
 
     val isShowing: Boolean get() = view != null
+
+    /**
+     * True while the FULL climb panel — the only place system data fields are
+     * drawn — is on screen. The extension keeps OnStreamState consumers alive
+     * only then, so hidden fields cost no stream traffic.
+     */
+    val fieldsVisible = MutableStateFlow(false)
 
     /** Show (or update) the overlay for [state] with current [settings]. */
     fun show(
@@ -47,6 +56,7 @@ class OverlayController(private val service: ClimberExtension) {
         sysValues: Map<String, Map<String, Double>>,
     ) {
         lastSettings = settings
+        lastHasActive = state.active != null
         if (!AndroidSettings.canDrawOverlays(service)) {
             notifyPermissionNeeded()
             return
@@ -61,7 +71,10 @@ class OverlayController(private val service: ClimberExtension) {
             val params = layoutParams(created, settings)
             windowManager.addView(created, params)
             appliedParams = params
-            created.onRelayoutNeeded = { lastSettings?.let { relayout(it) } }
+            created.onRelayoutNeeded = {
+                lastSettings?.let { relayout(it) }
+                refreshFieldsVisible()
+            }
             created.onHardwareKeyPassthrough = { keyCode ->
                 hardwareActionFor(keyCode)?.let { service.karooSystem.dispatch(it) }
             }
@@ -69,6 +82,7 @@ class OverlayController(private val service: ClimberExtension) {
             current.update(state, settings, imperial, sysValues)
             applyLayoutIfChanged(current, settings)
         }
+        refreshFieldsVisible()
     }
 
     fun hide() {
@@ -77,7 +91,15 @@ class OverlayController(private val service: ClimberExtension) {
             view = null
         }
         appliedParams = null
+        lastHasActive = false
+        fieldsVisible.value = false
         service.stopForeground(Service.STOP_FOREGROUND_REMOVE)
+    }
+
+    /** Recompute [fieldsVisible]; called on every show() tick and panel resize. */
+    private fun refreshFieldsVisible() {
+        fieldsVisible.value =
+            view?.panelSize == ViewModeMachine.PanelSize.FULL && lastHasActive
     }
 
     /** Re-apply layout params (panel size switch, settings change). */

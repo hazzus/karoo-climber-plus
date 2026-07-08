@@ -94,15 +94,21 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
             }
         }
 
-        // Stream the system data types configured as full-view fields.
+        // Stream the system data types configured as full-view fields — but only
+        // while the FULL climb panel that draws them is on screen; the rest of
+        // the ride the consumers are torn down and cost nothing.
         scope.launch {
-            settingsRepo.settings.collect { settings ->
-                reconcileSysStreams(
+            combine(settingsRepo.settings, overlay.fieldsVisible) { settings, visible ->
+                if (!visible) {
+                    emptySet()
+                } else {
                     settings.fullFields
                         .flatMap { listOfNotNull(it.dataTypeId, it.extraDataTypeId) }
-                        .toSet(),
-                )
+                        .toSet()
+                }
             }
+                .distinctUntilChanged()
+                .collect { reconcileSysStreams(it) }
         }
 
         // Demo mode: loop synthetic progress along the demo route so the overlay
