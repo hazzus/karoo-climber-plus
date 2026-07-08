@@ -69,13 +69,16 @@ Karoo's IBM Plex Sans Condensed font — but goes further where it counts:
 
 ### Gestures
 
-| Gesture | Action |
-|---|---|
-| Tap chip | open the drawer |
-| Tap drawer/full profile | cycle display modes |
-| Swipe up | drawer → full screen |
-| Swipe down | full screen → drawer → chip |
-| Drag (full-screen list) | scroll climbs |
+Swipe directions follow the overlay position: swiping away from the anchored
+edge grows the panel, swiping toward it shrinks.
+
+| Action | Gesture (top) | Gesture (bottom) |
+|---|---|---|
+| Open the drawer | tap chip | tap chip |
+| Cycle display modes | tap drawer/full profile | tap drawer/full profile |
+| Grow: drawer → full screen | swipe down | swipe up |
+| Shrink: full screen → drawer → chip | swipe up | swipe down |
+| Scroll climbs (full-screen list) | drag | drag |
 
 ## Installation
 
