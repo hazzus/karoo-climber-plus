@@ -24,8 +24,12 @@ class ProgressRepo(private val karooSystem: KarooSystemService) {
         consumerId = karooSystem.addConsumer<OnStreamState>(
             OnStreamState.StartStreaming(DataType.Type.DISTANCE_TO_DESTINATION),
         ) { event ->
+            // The data point carries several fields (distance, NAVIGATION_STATE,
+            // ON_ROUTE, ...) — singleValue grabs an arbitrary one, so key explicitly.
+            val values = (event.state as? StreamState.Streaming)?.dataPoint?.values
             _distanceToDestination.value =
-                (event.state as? StreamState.Streaming)?.dataPoint?.singleValue
+                values?.get(DataType.Field.DISTANCE_TO_DESTINATION)
+                    ?: values?.get(DataType.Field.SINGLE)
         }
     }
 
