@@ -208,7 +208,49 @@ class ClimbOverlayView(context: Context) : View(context) {
         palette = GradePalettes.byId(newSettings.paletteId)
         imperial = isImperial
         sysValues = newSysValues
+        val signature = renderSignature(newState)
+        if (signature != null && signature == lastSignature) return
+        lastSignature = signature
         invalidate()
+    }
+
+    private var lastSignature: List<Any?>? = null
+
+    /**
+     * Fingerprint of what onDraw would render, or null for the climb panels whose
+     * geometry (marker, past shading, approach bar) moves with every progress tick.
+     * Values are rounded before drawing, so most 1 Hz updates repaint identical
+     * pixels — update() skips those invalidates entirely (battery: an overlay
+     * redraw also recomposites everything beneath the translucent window).
+     * Must mirror onDraw: anything drawn that can change tick-to-tick belongs here.
+     */
+    private fun renderSignature(s: ClimbUiState.Shown): List<Any?>? {
+        val active = s.active
+        val content: List<Any?> = when {
+            machine.size != PanelSize.CHIP && active != null -> return null
+            machine.size == PanelSize.CHIP -> when {
+                active != null && active.distanceToStart <= 0 ->
+                    listOf(currentGrade(s), formatValue(active.distanceToTop))
+                active != null -> listOf(formatValue(active.distanceToStart))
+                else -> listOf(s.completedCount, s.totalCount)
+            }
+            else -> listOf(
+                // list panel: header counter + NEXT IN + per-row status text;
+                // lengths/grades come from the (compared) climbs list itself
+                s.completedCount,
+                s.climbs,
+                s.upcoming.firstOrNull()?.let { formatValue(it.startDistance - s.progress) },
+                listScrollPx,
+                s.climbs.map { climb ->
+                    when {
+                        s.progress >= climb.endDistance -> "done"
+                        s.progress >= climb.startDistance -> "now"
+                        else -> formatKm(climb.startDistance - s.progress)
+                    }
+                },
+            )
+        }
+        return listOf(machine.size, width, height, imperial, settings, content)
     }
 
     // -------------------------------------------------- per-climb cached data
