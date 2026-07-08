@@ -120,4 +120,13 @@ class ViewModeMachineTest {
         assertEquals(ViewModeMachine.PanelSize.CHIP, m.size)
         assertEquals(Mode.Base, m.mode)
     }
+
+    @Test
+    fun `new climb without auto-expand keeps the chip but resets mode`() {
+        val m = ViewModeMachine()
+        m.next(false, windows, 12000.0)
+        m.onNewClimb(expand = false)
+        assertEquals(ViewModeMachine.PanelSize.CHIP, m.size)
+        assertEquals(Mode.Base, m.mode)
+    }
 }

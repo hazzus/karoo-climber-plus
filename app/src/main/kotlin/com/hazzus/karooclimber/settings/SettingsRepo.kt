@@ -20,6 +20,7 @@ class SettingsRepo(private val context: Context) {
         val baseMode = stringPreferencesKey("base_mode")
         val previewWindowsKm = stringPreferencesKey("preview_windows_km")
         val triggerDistanceM = doublePreferencesKey("trigger_distance_m")
+        val autoExpand = booleanPreferencesKey("auto_expand")
         val anchor = stringPreferencesKey("anchor")
         val heightPercent = intPreferencesKey("height_percent")
         val opacityPercent = intPreferencesKey("opacity_percent")
@@ -36,6 +37,7 @@ class SettingsRepo(private val context: Context) {
                 ?: defaults.baseMode,
             previewWindowsKm = p[Keys.previewWindowsKm]?.parseWindows() ?: defaults.previewWindowsKm,
             triggerDistanceM = p[Keys.triggerDistanceM] ?: defaults.triggerDistanceM,
+            autoExpand = p[Keys.autoExpand] ?: defaults.autoExpand,
             anchor = p[Keys.anchor]?.let { runCatching { OverlayAnchor.valueOf(it) }.getOrNull() }
                 ?: defaults.anchor,
             heightPercent = (p[Keys.heightPercent] ?: defaults.heightPercent).coerceIn(15, 100),
@@ -56,6 +58,7 @@ class SettingsRepo(private val context: Context) {
                 previewWindowsKm = p[Keys.previewWindowsKm]?.parseWindows()
                     ?: defaults.previewWindowsKm,
                 triggerDistanceM = p[Keys.triggerDistanceM] ?: defaults.triggerDistanceM,
+                autoExpand = p[Keys.autoExpand] ?: defaults.autoExpand,
                 anchor = p[Keys.anchor]?.let { runCatching { OverlayAnchor.valueOf(it) }.getOrNull() }
                     ?: defaults.anchor,
                 heightPercent = p[Keys.heightPercent] ?: defaults.heightPercent,
@@ -69,6 +72,7 @@ class SettingsRepo(private val context: Context) {
             p[Keys.baseMode] = next.baseMode.name
             p[Keys.previewWindowsKm] = next.previewWindowsKm.joinToString(",")
             p[Keys.triggerDistanceM] = next.triggerDistanceM
+            p[Keys.autoExpand] = next.autoExpand
             p[Keys.anchor] = next.anchor.name
             p[Keys.heightPercent] = next.heightPercent
             p[Keys.opacityPercent] = next.opacityPercent

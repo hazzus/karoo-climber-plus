@@ -146,6 +146,9 @@ private fun SettingsScreen(
         }
 
         // ---- Behavior ----
+        SwitchRow("Auto-expand on upcoming climb", settings.autoExpand) { on ->
+            update { it.copy(autoExpand = on) }
+        }
         SectionTitle("Show before climb: ${settings.triggerDistanceM.toInt()} m")
         Slider(
             value = settings.triggerDistanceM.toFloat(),

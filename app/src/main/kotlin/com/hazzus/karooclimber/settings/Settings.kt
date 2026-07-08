@@ -51,6 +51,8 @@ data class Settings(
     val previewWindowsKm: List<Double> = listOf(2.0, 5.0, 10.0),
     /** Overlay appears this many meters before the climb starts. */
     val triggerDistanceM: Double = 500.0,
+    /** Pop the chip open into the drawer when a climb becomes active. */
+    val autoExpand: Boolean = true,
     val anchor: OverlayAnchor = OverlayAnchor.TOP,
     /** Panel height as % of screen height. */
     val heightPercent: Int = 40,

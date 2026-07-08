@@ -70,10 +70,10 @@ class ViewModeMachine {
         }
     }
 
-    /** New climb became active: reset mode and pop the drawer open. */
-    fun onNewClimb() {
+    /** New climb became active: reset mode and, if [expand], pop the drawer open. */
+    fun onNewClimb(expand: Boolean = true) {
         mode = Mode.Base
-        size = PanelSize.EXPANDED
+        if (expand) size = PanelSize.EXPANDED
     }
 
     /** Active climb topped/lost: back to the permanent chip. */

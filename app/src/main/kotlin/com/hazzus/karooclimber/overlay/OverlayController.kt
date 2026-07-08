@@ -93,7 +93,7 @@ class OverlayController(private val service: ClimberExtension) {
                 height = metrics.heightPixels * settings.heightPercent / 100
             }
             ViewModeMachine.PanelSize.FULL -> {
-                // 95%: keep the Karoo status bar visible
+                // 92%: keep the Karoo status bar visible
                 width = metrics.widthPixels
                 height = (metrics.heightPixels * FULL_HEIGHT_FRACTION).toInt()
             }
@@ -113,8 +113,18 @@ class OverlayController(private val service: ClimberExtension) {
                 settings.anchor == OverlayAnchor.TOP -> Gravity.TOP
                 else -> Gravity.BOTTOM
             } or Gravity.CENTER_HORIZONTAL
-            // keep the chip clear of Karoo's native edge overlays (pages, alerts)
-            if (size == ViewModeMachine.PanelSize.CHIP) {
+            // top-anchored panels start below the Karoo status bar — the same
+            // strip FULL keeps visible by stopping at 92%
+            if (size != ViewModeMachine.PanelSize.FULL &&
+                settings.anchor == OverlayAnchor.TOP
+            ) {
+                y = (metrics.heightPixels * (1 - FULL_HEIGHT_FRACTION)).toInt()
+            }
+            // keep the bottom chip clear of Karoo's native drawers; at the top
+            // the status-bar inset is enough
+            if (size == ViewModeMachine.PanelSize.CHIP &&
+                settings.anchor == OverlayAnchor.BOTTOM
+            ) {
                 y = (metrics.heightPixels * CHIP_EDGE_OFFSET_FRACTION).toInt()
             }
             alpha = settings.opacityPercent / 100f

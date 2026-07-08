@@ -21,6 +21,7 @@ import com.hazzus.karooclimber.palette.GradePalette
 import com.hazzus.karooclimber.palette.GradePalettes
 import com.hazzus.karooclimber.settings.BaseMode
 import com.hazzus.karooclimber.settings.ClimbField
+import com.hazzus.karooclimber.settings.OverlayAnchor
 import com.hazzus.karooclimber.settings.Settings
 import kotlin.math.abs
 import kotlin.math.min
@@ -31,7 +32,8 @@ import kotlin.math.min
  *  - EXPANDED drawer: climb profile, or the next-3-climbs list when idle
  *  - FULL screen: profile + 2x2 data fields, or the full scrollable climbs list
  *
- * Gestures: tap = expand chip / cycle modes; swipe up = grow; swipe down = shrink;
+ * Gestures: tap = expand chip / cycle modes; swipe away from the anchored edge = grow,
+ * toward it = shrink (up/down for a bottom drawer, down/up for a top one);
  * vertical drag scrolls the full list.
  */
 @SuppressLint("ViewConstructor")
@@ -95,15 +97,24 @@ class ClimbOverlayView(context: Context) : View(context) {
                 if (e1 == null) return false
                 val dy = e2.y - e1.y
                 if (abs(dy) < SWIPE_MIN_DISTANCE_PX || abs(dy) < abs(e2.x - e1.x)) return false
+                val flingDown = dy > 0 && velocityY > SWIPE_MIN_VELOCITY
+                val flingUp = dy < 0 && velocityY < -SWIPE_MIN_VELOCITY
+                // a top drawer opens downward, so grow/shrink directions invert
+                val topAnchored = settings.anchor == OverlayAnchor.TOP
+                val shrinks = if (topAnchored) flingUp else flingDown
+                val grows = if (topAnchored) flingDown else flingUp
                 val scrollableList = machine.size == PanelSize.FULL && state?.active == null
-                if (dy > 0 && velocityY > SWIPE_MIN_VELOCITY) {
-                    // swipe down shrinks; in the list it only shrinks from the very top
-                    if (scrollableList && listScrollPx > 0f) return false
+                if (shrinks) {
+                    // swiping toward the anchor shrinks; in the list only from the
+                    // scroll edge on that side, so mid-scroll flings don't collapse it
+                    val atShrinkEdge =
+                        if (topAnchored) listScrollPx >= maxListScroll() else listScrollPx <= 0f
+                    if (scrollableList && !atShrinkEdge) return false
                     if (machine.size != PanelSize.CHIP) {
                         resize { machine.collapse() }
                         return true
                     }
-                } else if (dy < 0 && velocityY < -SWIPE_MIN_VELOCITY) {
+                } else if (grows) {
                     if (scrollableList) return false
                     if (machine.size != PanelSize.FULL) {
                         resize { machine.expand() }
@@ -146,7 +157,7 @@ class ClimbOverlayView(context: Context) : View(context) {
     ) {
         val newKey = newState.active?.climb?.let { it.startDistance to it.endDistance }
         if (newKey != activeKey) {
-            if (newKey != null) machine.onNewClimb() else machine.onClimbEnded()
+            if (newKey != null) machine.onNewClimb(newSettings.autoExpand) else machine.onClimbEnded()
             activeKey = newKey
             if (newKey != null) rebuildClimbCache(newState)
             listScrollPx = 0f
