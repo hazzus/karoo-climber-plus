@@ -42,6 +42,12 @@
                 android:resource="@xml/extension_info" />
         </service>
 
+        <!-- Lets Karoo OS discover releases for install/update via the
+             companion app; manifest.json is attached by the release CI -->
+        <meta-data
+            android:name="io.hammerhead.karooext.MANIFEST_URL"
+            android:value="https://github.com/hazzus/karoo-climber-plus/releases/latest/download/manifest.json" />
+
     </application>
 
 </manifest>

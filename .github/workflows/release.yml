@@ -1,0 +1,94 @@
+name: Release
+
+# Tag-push release: `git tag v0.1.0 && git push origin v0.1.0` builds the signed
+# APK, generates the karoo-ext manifest.json and attaches both to a GitHub
+# release. The Karoo checks `releases/latest/download/manifest.json` (see
+# MANIFEST_URL in AndroidManifest.xml) for updates, so asset names must stay
+# stable across releases.
+#
+# Required repo secrets:
+#   KEYSTORE_BASE64   — `base64 -i ~/keystores/karoo-climber-plus.jks`
+#   KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD — matching keystore.properties
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches Gradle version
+        run: |
+          VERSION_NAME=$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
+          if [ "v$VERSION_NAME" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match versionName $VERSION_NAME in app/build.gradle.kts" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Write signing config
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/keystore.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Build signed release APK
+        run: ./gradlew assembleRelease
+
+      - name: Generate manifest.json
+        run: |
+          VERSION_NAME=$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
+          VERSION_CODE=$(sed -n 's/^[[:space:]]*versionCode = \([0-9]*\).*/\1/p' app/build.gradle.kts)
+          REPO_URL="https://github.com/${{ github.repository }}"
+          RAW_URL="https://raw.githubusercontent.com/${{ github.repository }}/main"
+          cat > manifest.json <<EOF
+          {
+            "label": "Climber+",
+            "packageName": "com.hazzus.karooclimber",
+            "latestApkUrl": "$REPO_URL/releases/latest/download/karoo-climber-plus.apk",
+            "latestVersion": "$VERSION_NAME",
+            "latestVersionCode": $VERSION_CODE,
+            "iconUrl": "$RAW_URL/docs/img/icon.png",
+            "developer": "hazzus",
+            "description": "Floating climb overlay: gradient-colored profile, next-500 m grade strip, climbs list and configurable data fields on top of any ride page.",
+            "releaseNotes": "$REPO_URL/releases/tag/$GITHUB_REF_NAME",
+            "screenshotUrls": [
+              "$RAW_URL/docs/img/drawer-approach.png",
+              "$RAW_URL/docs/img/drawer-climbing.png",
+              "$RAW_URL/docs/img/full-view.png"
+            ]
+          }
+          EOF
+          cat manifest.json
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            app/build/outputs/apk/release/karoo-climber-plus.apk
+            manifest.json

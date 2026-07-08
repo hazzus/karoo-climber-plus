@@ -21,6 +21,11 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 - Single test: `./gradlew testDebugUnitTest --tests "com.hazzus.karooclimber.ClimbEngineTest"`
 - Release:    `./gradlew assembleRelease` → signed `karoo-climber-plus.apk`; signing reads
   gitignored `keystore.properties` (keystore at `~/keystores/karoo-climber-plus.jks`)
+- Publish:    push tag `v<versionName>` (must match `app/build.gradle.kts`) →
+  `.github/workflows/release.yml` tests, builds and attaches the APK +
+  karoo-ext `manifest.json` to a GitHub release (secrets: `KEYSTORE_BASE64`,
+  `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`). Release asset names feed
+  `MANIFEST_URL` in the AndroidManifest — keep them stable.
 - Install:    `adb install -r app/build/outputs/apk/debug/karoo-climber-plus-debug.apk`
   (debug and release have different signatures — switching requires uninstall)
 

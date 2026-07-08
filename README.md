@@ -59,6 +59,14 @@ extension API. No system modification.
 
 Climber+ works on Karoo 2 and Karoo 3 (Karoo OS with Extensions support).
 
+**Via the Hammerhead companion app** (Karoo 3, recommended): open
+[the latest APK link](../../releases/latest/download/karoo-climber-plus.apk)
+on your phone and share it with the Hammerhead Companion app to sideload it.
+Once installed, the Karoo picks up new releases automatically (the app
+publishes a karoo-ext `manifest.json` with each release).
+
+**Via adb:**
+
 1. Download the latest `karoo-climber-plus.apk` from the
    [releases page](../../releases) (or build it, see below).
 2. Enable Developer Options + USB debugging on the Karoo
@@ -67,10 +75,11 @@ Climber+ works on Karoo 2 and Karoo 3 (Karoo OS with Extensions support).
    ```sh
    adb install karoo-climber-plus.apk
    ```
-4. Open **Climber+** from the Karoo launcher and grant the
-   **draw over other apps** permission (required for the overlay window).
-5. Optional: flip on **Demo mode** in the settings to see the overlay in action
-   immediately.
+
+Then open **Climber+** from the Karoo launcher and grant the
+**draw over other apps** permission (required for the overlay window).
+Optional: flip on **Demo mode** in the settings to see the overlay in action
+immediately.
 
 On a ride: load a route with detected climbs and start navigating — the chip
 appears right away, the drawer pops before each climb.
@@ -102,6 +111,21 @@ Release builds are signed with a local keystore: copy `keystore.properties`
 (see `app/build.gradle.kts`; not committed) pointing at your own keystore,
 then `./gradlew assembleRelease` produces
 `app/build/outputs/apk/release/karoo-climber-plus.apk`.
+
+### Releasing
+
+Releases are cut by CI (`.github/workflows/release.yml`): bump `versionCode`
+and `versionName` in `app/build.gradle.kts`, then tag and push:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The workflow runs the unit tests, builds the signed APK and publishes a GitHub
+release with `karoo-climber-plus.apk` and the karoo-ext `manifest.json`
+attached (installed devices see the update automatically). Signing uses the
+repo secrets `KEYSTORE_BASE64` (`base64 -i` of the `.jks`),
+`KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD`.
 
 ## How it works
 
