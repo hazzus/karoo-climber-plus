@@ -51,8 +51,11 @@ Karoo's IBM Plex Sans Condensed font — but goes further where it counts:
     with the matching section highlighted on the profile — sliding smoothly
     from your position, not snapped to a fixed grid
 - **Full-screen view** (swipe up): profile + four **configurable data fields** —
-  climb metrics (dist/elev to top, climb x/y, current/avg grade, length) or live
-  system data (speed, power, 3s power, HR, cadence, ascent, distance)
+  the overlay's own climb metrics, plus *anything the Karoo provides*: every
+  karoo-ext data stream (power, heart rate, VAM, laps, live segments, e-bike,
+  and so on) selectable from a categorized picker. With
+  [Ki2](https://github.com/valterc/ki2) installed, Shimano Di2 fields are
+  available too (gears, gear ratio, shift counts, Di2 battery)
 - **Climbs list**: the next 3 climbs in the drawer, the full scrollable list in
   full screen — to start / length / avg grade, rows colored by grade, finished
   climbs ticked off with a checkmark
@@ -119,7 +122,8 @@ Open the Climber+ app on the Karoo:
 - **Show before climb**: 100–2000 m trigger distance
 - **Tap preview windows**: add/remove custom km windows
 - **Position / Height / Opacity**: where and how big the drawer is
-- **Full-screen view fields**: pick the four data fields
+- **Full-screen view fields**: pick the four data fields from a categorized
+  menu — climb metrics, any Karoo data stream, and Ki2 (Di2) fields
 - **Debug**: demo mode with a canned two-climb route
 
 ## Building
@@ -170,6 +174,8 @@ repo secrets `KEYSTORE_BASE64` (`base64 -i` of the `.jks`),
 - If Karoo OS doesn't provide an elevation polyline for a route, the profile
   falls back to a constant-grade rendering from the climb summary.
 - System data fields show `--` until their stream produces values (in-ride).
+- Ki2 (Di2) fields need the [Ki2](https://github.com/valterc/ki2) extension
+  installed and the shifters paired/awake.
 
 ## Credits
 
