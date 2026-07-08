@@ -22,7 +22,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -44,7 +47,6 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
 
     private val rideActive = MutableStateFlow(false)
     private val imperial = MutableStateFlow(false)
-    private val demoEnabled = MutableStateFlow(false)
     private val demoProgress = MutableStateFlow(0.0)
     private val consumerIds = mutableListOf<String>()
 
@@ -104,19 +106,20 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         }
 
         // Demo mode: loop synthetic progress along the demo route so the overlay
-        // can be inspected on the desk without riding.
+        // can be inspected on the desk without riding. collectLatest cancels the
+        // ticker whenever demo mode is off, so real rides get no 1 Hz wakeups.
         scope.launch {
-            settingsRepo.settings.collect { demoEnabled.value = it.demoMode }
-        }
-        scope.launch {
-            while (true) {
-                if (demoEnabled.value) {
-                    // loop the whole demo route so all chip/list/climb states show
-                    val next = demoProgress.value + DEMO_SPEED_MPS
-                    demoProgress.value = if (next > 4900.0) 0.0 else next
+            settingsRepo.settings
+                .map { it.demoMode }
+                .distinctUntilChanged()
+                .collectLatest { enabled ->
+                    while (enabled) {
+                        // loop the whole demo route so all chip/list/climb states show
+                        val next = demoProgress.value + DEMO_SPEED_MPS
+                        demoProgress.value = if (next > 4900.0) 0.0 else next
+                        delay(1000)
+                    }
                 }
-                delay(1000)
-            }
         }
     }
 
