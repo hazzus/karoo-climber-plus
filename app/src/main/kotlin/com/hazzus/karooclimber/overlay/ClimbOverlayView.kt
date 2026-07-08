@@ -10,6 +10,8 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.view.GestureDetector
+import android.view.KeyCharacterMap
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import com.hazzus.karooclimber.R
@@ -38,7 +40,8 @@ import kotlin.math.roundToInt
  *
  * Gestures: tap = expand chip / cycle modes; swipe away from the anchored edge = grow,
  * toward it = shrink (up/down for a bottom drawer, down/up for a top one);
- * vertical drag scrolls the full list.
+ * vertical drag scrolls the full list. Hardware: the bottom-left button shrinks
+ * like the hide swipe (drawer/full only — the chip window never takes key focus).
  */
 @SuppressLint("ViewConstructor")
 class ClimbOverlayView(context: Context) : View(context) {
@@ -55,6 +58,9 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     /** Controller hook: window size must change. */
     var onRelayoutNeeded: (() -> Unit)? = null
+
+    /** Controller hook: physical hardware key the overlay doesn't use itself. */
+    var onHardwareKeyPassthrough: ((Int) -> Unit)? = null
 
     val panelSize: PanelSize get() = machine.size
 
@@ -133,6 +139,35 @@ class ClimbOverlayView(context: Context) : View(context) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         return gestureDetector.onTouchEvent(event) || super.onTouchEvent(event)
+    }
+
+    // Key events only arrive while the window is focusable (drawer/full — never CHIP,
+    // so the chip leaves all hardware buttons to Karoo). Bottom-left (BACK) shrinks
+    // like the hide swipe; the other buttons are handed back to Karoo OS via
+    // PerformHardwareAction so paging etc. keep working behind the panel.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (machine.size == PanelSize.CHIP) return super.dispatchKeyEvent(event)
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_BACK -> {
+                if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) {
+                    resize { machine.collapse() }
+                }
+            }
+            KeyEvent.KEYCODE_NAVIGATE_PREVIOUS,
+            KeyEvent.KEYCODE_NAVIGATE_NEXT,
+            KeyEvent.KEYCODE_NAVIGATE_IN,
+            -> {
+                // physical presses only: PerformHardwareAction may inject a virtual
+                // copy back at this focused window, which must not be re-forwarded
+                if (event.action == KeyEvent.ACTION_UP &&
+                    event.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD
+                ) {
+                    onHardwareKeyPassthrough?.invoke(event.keyCode)
+                }
+            }
+            else -> return super.dispatchKeyEvent(event)
+        }
+        return true
     }
 
     private fun cycleMode(s: ClimbUiState.Shown) {

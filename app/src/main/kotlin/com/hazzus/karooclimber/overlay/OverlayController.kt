@@ -9,12 +9,14 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.provider.Settings as AndroidSettings
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.WindowManager
 import com.hazzus.karooclimber.ClimberExtension
 import com.hazzus.karooclimber.R
 import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.settings.OverlayAnchor
 import com.hazzus.karooclimber.settings.Settings
+import io.hammerhead.karooext.models.PerformHardwareAction
 import io.hammerhead.karooext.models.SystemNotification
 
 /**
@@ -57,6 +59,9 @@ class OverlayController(private val service: ClimberExtension) {
             created.update(state, settings, imperial, sysValues)
             windowManager.addView(created, layoutParams(created, settings))
             created.onRelayoutNeeded = { lastSettings?.let { relayout(it) } }
+            created.onHardwareKeyPassthrough = { keyCode ->
+                hardwareActionFor(keyCode)?.let { service.karooSystem.dispatch(it) }
+            }
         } else {
             current.update(state, settings, imperial, sysValues)
             windowManager.updateViewLayout(current, layoutParams(current, settings))
@@ -98,11 +103,19 @@ class OverlayController(private val service: ClimberExtension) {
                 height = (metrics.heightPixels * FULL_HEIGHT_FRACTION).toInt()
             }
         }
+        // the chip stays non-focusable so hardware buttons keep their native actions;
+        // bigger panels take key focus so the bottom-left button collapses them
+        val focusFlag =
+            if (size == ViewModeMachine.PanelSize.CHIP) {
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            } else {
+                0
+            }
         return WindowManager.LayoutParams(
             width,
             height,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            focusFlag
                 or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
@@ -129,6 +142,14 @@ class OverlayController(private val service: ClimberExtension) {
             }
             alpha = settings.opacityPercent / 100f
         }
+    }
+
+    /** Karoo hardware key -> effect replaying it, ki2's KarooKey mapping (BACK is ours). */
+    private fun hardwareActionFor(keyCode: Int): PerformHardwareAction? = when (keyCode) {
+        KeyEvent.KEYCODE_NAVIGATE_PREVIOUS -> PerformHardwareAction.TopLeftPress
+        KeyEvent.KEYCODE_NAVIGATE_NEXT -> PerformHardwareAction.TopRightPress
+        KeyEvent.KEYCODE_NAVIGATE_IN -> PerformHardwareAction.BottomRightPress
+        else -> null
     }
 
     @SuppressLint("MissingPermission") // POST_NOTIFICATIONS declared; degraded is fine pre-33 grant

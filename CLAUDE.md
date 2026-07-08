@@ -71,7 +71,10 @@ Data flows one way: karoo-ext events → repos → pure engine → overlay windo
   sliding next-500 m chunk strip, climbs list, 2×2 data-field grid.
   `ViewModeMachine` holds display mode (Base/Alt/Preview round-robin) and panel size;
   gestures: tap = expand chip / cycle modes, swipe up/down = resize, drag scrolls the
-  full-screen list.
+  full-screen list. Hardware buttons: the window is key-focusable except in CHIP;
+  bottom-left (KEYCODE_BACK) = shrink one step, the other three keys are replayed to
+  Karoo OS via `PerformHardwareAction` (physical presses only — virtual ones would
+  loop back into the focused overlay).
 - **`settings/`** — DataStore-backed `SettingsRepo`; `ClimbField` enum doubles as
   climb-derived fields (no `dataTypeId`) and Karoo system stream fields (with one).
   Compose UI only in `SettingsActivity` — the overlay deliberately avoids Compose.

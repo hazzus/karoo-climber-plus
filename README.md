@@ -83,6 +83,10 @@ edge grows the panel, swiping toward it shrinks.
 | Shrink: full screen → drawer → chip | swipe up | swipe down |
 | Scroll climbs (full-screen list) | drag | drag |
 
+The **bottom-left hardware button** also shrinks the panel one step while the
+drawer or full screen is open (same as the shrink swipe). In chip mode all
+hardware buttons keep their native Karoo actions.
+
 ## Installation
 
 Climber+ works on Karoo 2 and Karoo 3 (Karoo OS with Extensions support).
