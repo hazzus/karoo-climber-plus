@@ -66,7 +66,6 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
             Log.i(TAG, "Karoo system connected=$connected")
         }
         navigationRepo.start()
-        progressRepo.start()
 
         consumerIds += karooSystem.addConsumer<RideState> { state ->
             rideActive.value = state is RideState.Recording || state is RideState.Paused
@@ -74,6 +73,19 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         consumerIds += karooSystem.addConsumer<UserProfile> { profile ->
             imperial.value =
                 profile.preferredUnit.distance == UserProfile.PreferredUnit.UnitType.IMPERIAL
+        }
+
+        // The DISTANCE_TO_DESTINATION stream (~1 Hz for a whole ride) is only read
+        // by computeState when the overlay is on, a ride is recording and demo mode
+        // isn't short-circuiting it — release the consumer whenever that's not true.
+        scope.launch {
+            combine(settingsRepo.settings, rideActive) { settings, riding ->
+                settings.overlayEnabled && riding && !settings.demoMode
+            }
+                .distinctUntilChanged()
+                .collect { needed ->
+                    if (needed) progressRepo.start() else progressRepo.stop()
+                }
         }
 
         scope.launch {
