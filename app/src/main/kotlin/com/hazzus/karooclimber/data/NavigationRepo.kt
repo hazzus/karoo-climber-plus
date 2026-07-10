@@ -15,6 +15,7 @@ class NavigationRepo(private val karooSystem: KarooSystemService) {
     val route: StateFlow<RouteData?> = _route
 
     private var consumerId: String? = null
+    private val climbCache = ClimbListCache()
 
     fun start() {
         if (consumerId != null) return
@@ -26,23 +27,33 @@ class NavigationRepo(private val karooSystem: KarooSystemService) {
     fun stop() {
         consumerId?.let { karooSystem.removeConsumer(it) }
         consumerId = null
+        climbCache.clear()
         _route.value = null
     }
 
     private fun OnNavigationState.NavigationState.toRouteData(): RouteData? = when (this) {
-        is OnNavigationState.NavigationState.Idle -> null
-        is OnNavigationState.NavigationState.NavigatingRoute -> RouteData(
-            routeDistance = routeDistance,
-            profile = ElevationProfile.fromPolyline(routeElevationPolyline),
-            climbs = climbs.map { it.toClimbData() },
-            routeKey = "route:$name:${routePolyline.hashCode()}:$reversed",
-        )
-        is OnNavigationState.NavigationState.NavigatingToDestination -> RouteData(
-            routeDistance = null,
-            profile = ElevationProfile.fromPolyline(elevationPolyline),
-            climbs = climbs.map { it.toClimbData() },
-            routeKey = "dest:${destination.id}:${polyline.hashCode()}",
-        )
+        is OnNavigationState.NavigationState.Idle -> {
+            climbCache.clear()
+            null
+        }
+        is OnNavigationState.NavigationState.NavigatingRoute -> {
+            val routeKey = "route:$name:${routePolyline.hashCode()}:$reversed"
+            RouteData(
+                routeDistance = routeDistance,
+                profile = ElevationProfile.fromPolyline(routeElevationPolyline),
+                climbs = climbCache.reconcile(routeKey, climbs.map { it.toClimbData() }),
+                routeKey = routeKey,
+            )
+        }
+        is OnNavigationState.NavigationState.NavigatingToDestination -> {
+            val routeKey = "dest:${destination.id}:${polyline.hashCode()}"
+            RouteData(
+                routeDistance = null,
+                profile = ElevationProfile.fromPolyline(elevationPolyline),
+                climbs = climbCache.reconcile(routeKey, climbs.map { it.toClimbData() }),
+                routeKey = routeKey,
+            )
+        }
     }
 
     private fun OnNavigationState.NavigationState.Climb.toClimbData() = ClimbData(
@@ -51,4 +62,30 @@ class NavigationRepo(private val karooSystem: KarooSystemService) {
         avgGrade = grade,
         totalElevation = totalElevation,
     )
+}
+
+/**
+ * Karoo OS re-emits [OnNavigationState] during a ride with climbs removed from
+ * the `climbs` list once the rider reaches them (and may report an empty list
+ * mid-reroute). Keep the fullest list seen for the current route and ignore
+ * shrunk updates, so climb count and progress stay stable for the whole ride.
+ */
+class ClimbListCache {
+    private var key: String? = null
+    private var climbs: List<ClimbData> = emptyList()
+
+    fun reconcile(routeKey: String, incoming: List<ClimbData>): List<ClimbData> {
+        if (routeKey != key) {
+            key = routeKey
+            climbs = incoming
+        } else if (incoming.size > climbs.size) {
+            climbs = incoming
+        }
+        return climbs
+    }
+
+    fun clear() {
+        key = null
+        climbs = emptyList()
+    }
 }
