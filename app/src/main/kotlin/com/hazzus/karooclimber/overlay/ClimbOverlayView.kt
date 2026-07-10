@@ -383,7 +383,7 @@ class ClimbOverlayView(context: Context) : View(context) {
         }
 
         val text = if (active == null) {
-            "${s.completedCount}/${s.totalCount} climbs"
+            "CLIMBS ${s.completedCount}/${s.totalCount}"
         } else {
             "IN ${formatValue(active.distanceToStart)}"
         }
@@ -803,9 +803,9 @@ class ClimbOverlayView(context: Context) : View(context) {
 
         val rows = if (scrollable) s.climbs else s.upcoming.take(limit)
         if (rows.isEmpty()) {
-            subTextPaint.textSize = headerH * 0.35f
+            subTextPaint.textSize = headerH * 0.45f
             subTextPaint.textAlign = Paint.Align.CENTER
-            canvas.drawText("no climbs ahead", width / 2f, height / 2f, subTextPaint)
+            canvas.drawText("NO CLIMBS AHEAD", width / 2f, height / 2f, subTextPaint)
             return
         }
 

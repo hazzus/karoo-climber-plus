@@ -63,6 +63,12 @@ class ClimbEngineTest {
     }
 
     @Test
+    fun `hidden when the route has no climbs`() {
+        val engine = ClimbEngine()
+        assertEquals(ClimbUiState.Hidden, engine.update(route.copy(climbs = emptyList()), 1000.0, trigger))
+    }
+
+    @Test
     fun `shown without active before trigger window`() {
         val engine = ClimbEngine()
         // climb A starts at 2000, trigger 500 -> no active until 1500

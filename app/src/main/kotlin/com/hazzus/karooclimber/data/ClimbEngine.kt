@@ -1,8 +1,8 @@
 package com.hazzus.karooclimber.data
 
 /**
- * Pure logic producing the overlay state. With a route present the state is
- * always [ClimbUiState.Shown] (permanent chip); [ClimbUiState.Shown.active] is
+ * Pure logic producing the overlay state. With a route that has climbs the state
+ * is always [ClimbUiState.Shown] (permanent chip); [ClimbUiState.Shown.active] is
  * set while approaching/on a climb. Holds only stickiness state so
  * trigger-boundary GPS noise doesn't flap the active climb on and off.
  */
@@ -14,7 +14,7 @@ class ClimbEngine(
     private var recentlyHiddenKey: String? = null
 
     fun update(route: RouteData?, progress: Double?, triggerDistance: Double): ClimbUiState {
-        if (route == null || progress == null) {
+        if (route == null || progress == null || route.climbs.isEmpty()) {
             shownKey = null
             recentlyHiddenKey = null
             return ClimbUiState.Hidden
