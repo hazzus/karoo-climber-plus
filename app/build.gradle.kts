@@ -20,8 +20,8 @@ android {
         applicationId = "com.hazzus.karooclimber"
         minSdk = 26 // Karoo 2 (Android 8)
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 7
+        versionName = "0.1.6"
     }
 
     signingConfigs {
