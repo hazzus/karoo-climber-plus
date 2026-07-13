@@ -36,6 +36,39 @@ class ClimbListCacheTest {
     }
 
     @Test
+    fun `re-based climbs after reroute replace the cached list`() {
+        // Rider joined the route past its start: Karoo re-emits the same climbs
+        // with startDistance shifted by the skipped prefix. Same size, new content.
+        cache.reconcile("route:x", listOf(climbA, climbB))
+        val rebasedA = climbA.copy(startDistance = climbA.startDistance - 1500.0)
+        val rebasedB = climbB.copy(startDistance = climbB.startDistance - 1500.0)
+        assertEquals(
+            listOf(rebasedA, rebasedB),
+            cache.reconcile("route:x", listOf(rebasedA, rebasedB)),
+        )
+    }
+
+    @Test
+    fun `climbs skipped by reroute drop out of the list`() {
+        cache.reconcile("route:x", listOf(climbA, climbB))
+        val rebasedB = climbB.copy(startDistance = 3200.0)
+        assertEquals(listOf(rebasedB), cache.reconcile("route:x", listOf(rebasedB)))
+    }
+
+    @Test
+    fun `shrunk update after a reroute keeps the adopted list`() {
+        cache.reconcile("route:x", listOf(climbA, climbB))
+        val rebasedA = climbA.copy(startDistance = 500.0)
+        val rebasedB = climbB.copy(startDistance = 5500.0)
+        cache.reconcile("route:x", listOf(rebasedA, rebasedB))
+        // Rider reaches the first re-based climb; Karoo drops it from the emission.
+        assertEquals(
+            listOf(rebasedA, rebasedB),
+            cache.reconcile("route:x", listOf(rebasedB)),
+        )
+    }
+
+    @Test
     fun `route change resets the cache even to a smaller list`() {
         cache.reconcile("route:x", listOf(climbA, climbB))
         assertEquals(listOf(climbB), cache.reconcile("route:y", listOf(climbB)))

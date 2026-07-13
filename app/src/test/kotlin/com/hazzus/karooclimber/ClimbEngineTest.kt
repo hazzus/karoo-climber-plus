@@ -84,14 +84,50 @@ class ClimbEngineTest {
         assertEquals(0, early.completedCount)
         assertEquals(2, early.upcoming.size)
 
-        val betweenClimbs = shownAt(engine, 6000.0)
+        shownAt(engine, 3000.0) // riding climb A
+        val betweenClimbs = shownAt(engine, 6000.0) // topped A
         assertEquals(1, betweenClimbs.completedCount)
+        assertEquals(2, betweenClimbs.totalCount)
         assertEquals(1, betweenClimbs.upcoming.size)
 
+        shownAt(engine, 7500.0) // riding climb B
         val afterAll = shownAt(engine, 9500.0)
         assertEquals(2, afterAll.completedCount)
+        assertEquals(2, afterAll.totalCount)
         assertTrue(afterAll.upcoming.isEmpty())
         assertNull(afterAll.active)
+    }
+
+    @Test
+    fun `climbs never ridden do not count as completed or total`() {
+        val engine = ClimbEngine()
+        // rider joins the route between the climbs without ever riding climb A
+        val s = shownAt(engine, 6000.0)
+        assertEquals(0, s.completedCount)
+        assertEquals(1, s.totalCount)
+        assertEquals(1, s.upcoming.size)
+    }
+
+    @Test
+    fun `completed climbs survive reroute list adoption`() {
+        val engine = ClimbEngine()
+        shownAt(engine, 3000.0) // riding climb A
+        shownAt(engine, 5000.0) // topped A
+        // reroute: climb list re-based and climb A dropped, same route key
+        val rebasedB = ClimbData(startDistance = 6500.0, length = 1200.0, avgGrade = 7.5, totalElevation = 90.0)
+        val rerouted = route.copy(climbs = listOf(rebasedB))
+        val s = engine.update(rerouted, 5000.0, trigger) as ClimbUiState.Shown
+        assertEquals(1, s.completedCount)
+        assertEquals(2, s.totalCount)
+        assertTrue(s.climbs.first().done)
+        assertEquals(route.climbs[0], s.climbs.first().climb)
+        assertEquals(rebasedB, s.climbs.last().climb)
+
+        // riding and topping the re-based climb counts it on top
+        engine.update(rerouted, 7000.0, trigger) // riding re-based B
+        val done = engine.update(rerouted, 7800.0, trigger) as ClimbUiState.Shown
+        assertEquals(2, done.completedCount)
+        assertEquals(2, done.totalCount)
     }
 
     @Test

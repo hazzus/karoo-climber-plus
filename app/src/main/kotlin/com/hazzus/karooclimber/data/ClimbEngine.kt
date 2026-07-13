@@ -3,47 +3,83 @@ package com.hazzus.karooclimber.data
 /**
  * Pure logic producing the overlay state. With a route that has climbs the state
  * is always [ClimbUiState.Shown] (permanent chip); [ClimbUiState.Shown.active] is
- * set while approaching/on a climb. Holds only stickiness state so
- * trigger-boundary GPS noise doesn't flap the active climb on and off.
+ * set while approaching/on a climb.
+ *
+ * Holds per-ride state:
+ *  - stickiness so trigger-boundary GPS noise doesn't flap the active climb;
+ *  - the climbs the rider actually topped. Karoo climbs carry no id and a
+ *    reroute re-bases their distances (and drops passed ones from the list),
+ *    so completions are recorded separately, with the climb data frozen at
+ *    completion time, and only for climbs the rider was observed on — climbs
+ *    skipped by joining the route mid-way never count.
  */
 class ClimbEngine(
     /** Extra meters past the trigger boundary required to re-activate after a drop-out. */
     private val reappearMargin: Double = 100.0,
 ) {
+    private var routeKey: String? = null
     private var shownKey: String? = null
     private var recentlyHiddenKey: String? = null
 
+    /** Climb currently under the rider; completion is recorded when leaving it past the top. */
+    private var riding: ClimbData? = null
+    private val completed = mutableListOf<ClimbData>()
+
+    /** Forget all per-ride state (ride ended, demo loop wrapped). */
+    fun reset() {
+        routeKey = null
+        shownKey = null
+        recentlyHiddenKey = null
+        riding = null
+        completed.clear()
+    }
+
     fun update(route: RouteData?, progress: Double?, triggerDistance: Double): ClimbUiState {
-        if (route == null || progress == null || route.climbs.isEmpty()) {
-            shownKey = null
-            recentlyHiddenKey = null
+        if (route == null || progress == null) {
+            reset()
             return ClimbUiState.Hidden
         }
+        if (route.routeKey != routeKey) {
+            reset()
+            routeKey = route.routeKey
+        }
+        if (route.climbs.isEmpty() && completed.isEmpty()) return ClimbUiState.Hidden
 
         val sorted = route.climbs.sortedBy { it.startDistance }
-        val completed = sorted.count { progress >= it.endDistance }
-        val active = selectActive(route, sorted, progress, triggerDistance)
+        recordCompletion(sorted, progress)
+
+        // Climbs still to ride: skipped-behind ones (never ridden, progress already
+        // past their top) drop out here — a reroute took them off the rider's path.
+        val ahead = sorted.filter { progress < it.endDistance }
+        val active = selectActive(route, ahead, progress, triggerDistance)
 
         return ClimbUiState.Shown(
-            climbs = sorted,
+            climbs = completed.map { ClimbEntry(it, done = true) } +
+                ahead.map { ClimbEntry(it, done = false) },
             progress = progress,
             profile = route.profile,
-            completedCount = completed,
             active = active,
         )
     }
 
+    private fun recordCompletion(sorted: List<ClimbData>, progress: Double) {
+        val onClimb = sorted.firstOrNull { progress >= it.startDistance && progress < it.endDistance }
+        val prev = riding
+        if (prev != null && prev != onClimb && progress >= prev.endDistance && prev !in completed) {
+            completed += prev
+        }
+        riding = onClimb
+    }
+
     private fun selectActive(
         route: RouteData,
-        sorted: List<ClimbData>,
+        ahead: List<ClimbData>,
         progress: Double,
         triggerDistance: Double,
     ): ClimbUiState.ActiveClimb? {
         // First climb not yet topped whose trigger window has been entered.
-        val candidateIndex = sorted.indexOfFirst { climb ->
-            progress < climb.endDistance && progress >= climb.startDistance - triggerDistance
-        }
-        if (candidateIndex < 0) {
+        val aheadIndex = ahead.indexOfFirst { progress >= it.startDistance - triggerDistance }
+        if (aheadIndex < 0) {
             if (shownKey != null) {
                 recentlyHiddenKey = shownKey
                 shownKey = null
@@ -51,7 +87,7 @@ class ClimbEngine(
             return null
         }
 
-        val climb = sorted[candidateIndex]
+        val climb = ahead[aheadIndex]
         val key = "${route.routeKey}:${climb.startDistance}"
 
         // Hysteresis: this climb just flapped off at the trigger boundary — require
@@ -67,7 +103,7 @@ class ClimbEngine(
 
         return ClimbUiState.ActiveClimb(
             climb = climb,
-            index = candidateIndex,
+            index = completed.size + aheadIndex,
             distanceToStart = (climb.startDistance - progress).coerceAtLeast(0.0),
             distanceToTop = (climb.endDistance - progress).coerceAtLeast(0.0),
             elevationToTop = elevationToTop(route.profile, climb, progress),

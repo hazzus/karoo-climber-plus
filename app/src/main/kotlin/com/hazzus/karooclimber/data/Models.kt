@@ -23,6 +23,16 @@ data class RouteData(
     val totalDistance: Double? get() = routeDistance ?: profile?.totalDistance
 }
 
+/**
+ * A climb on this ride's list. Done entries keep the data recorded when the
+ * rider topped them — a reroute may have re-based route coordinates since, so
+ * their distances must not be compared against current progress.
+ */
+data class ClimbEntry(
+    val climb: ClimbData,
+    val done: Boolean,
+)
+
 /** What the overlay should show right now. */
 sealed interface ClimbUiState {
     /** No route -> no chip, nothing on screen. */
@@ -30,26 +40,26 @@ sealed interface ClimbUiState {
 
     /** A route is loaded; the chip is always present. */
     data class Shown(
-        /** All climbs on the route, sorted by start distance. */
-        val climbs: List<ClimbData>,
+        /** Topped climbs first (frozen data), then climbs still ahead, route order. */
+        val climbs: List<ClimbEntry>,
         /** Rider's distance along the route, meters. */
         val progress: Double,
         /** Whole-route profile (may be null when Karoo didn't send one). */
         val profile: ElevationProfile?,
-        /** Climbs already topped. */
-        val completedCount: Int,
         /** Set while approaching or on a climb (within the trigger window). */
         val active: ActiveClimb?,
     ) : ClimbUiState {
+        val completedCount: Int get() = climbs.count { it.done }
         val totalCount: Int get() = climbs.size
 
         /** Climbs not yet started, in route order. */
-        val upcoming: List<ClimbData> get() = climbs.filter { progress < it.startDistance }
+        val upcoming: List<ClimbData>
+            get() = climbs.filter { !it.done && progress < it.climb.startDistance }.map { it.climb }
     }
 
     data class ActiveClimb(
         val climb: ClimbData,
-        /** Index in route order (0-based). */
+        /** Position in [Shown.climbs] (0-based), i.e. counts completed climbs too. */
         val index: Int,
         /** Meters until the climb starts; 0 while on the climb. */
         val distanceToStart: Double,

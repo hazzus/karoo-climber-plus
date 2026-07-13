@@ -36,8 +36,11 @@ class NavigationRepo(private val karooSystem: KarooSystemService) {
             climbCache.clear()
             null
         }
+        // Keys deliberately exclude the polylines: a mid-ride reroute may regenerate
+        // them, and the climb cache and engine completed-list must survive that —
+        // ClimbListCache's content rule picks up the re-based climbs anyway.
         is OnNavigationState.NavigationState.NavigatingRoute -> {
-            val routeKey = "route:$name:${routePolyline.hashCode()}:$reversed"
+            val routeKey = "route:$name:$reversed"
             RouteData(
                 routeDistance = routeDistance,
                 profile = ElevationProfile.fromPolyline(routeElevationPolyline),
@@ -46,7 +49,7 @@ class NavigationRepo(private val karooSystem: KarooSystemService) {
             )
         }
         is OnNavigationState.NavigationState.NavigatingToDestination -> {
-            val routeKey = "dest:${destination.id}:${polyline.hashCode()}"
+            val routeKey = "dest:${destination.id}"
             RouteData(
                 routeDistance = null,
                 profile = ElevationProfile.fromPolyline(elevationPolyline),
@@ -67,8 +70,12 @@ class NavigationRepo(private val karooSystem: KarooSystemService) {
 /**
  * Karoo OS re-emits [OnNavigationState] during a ride with climbs removed from
  * the `climbs` list once the rider reaches them (and may report an empty list
- * mid-reroute). Keep the fullest list seen for the current route and ignore
- * shrunk updates, so climb count and progress stay stable for the whole ride.
+ * mid-reroute). Those two shrink cases keep the fuller cached list so climb
+ * count and progress stay stable for the whole ride. Any other content change —
+ * rerouting re-bases `startDistance` values and drops climbs the rider will
+ * skip (karoo-ext climbs carry no id, so full value equality is the only
+ * identity) — adopts the incoming list: it is the route truth now, and stale
+ * distances trigger climbs kilometers off.
  */
 class ClimbListCache {
     private var key: String? = null
@@ -78,7 +85,7 @@ class ClimbListCache {
         if (routeKey != key) {
             key = routeKey
             climbs = incoming
-        } else if (incoming.size > climbs.size) {
+        } else if (incoming.isNotEmpty() && !incoming.all { it in climbs }) {
             climbs = incoming
         }
         return climbs

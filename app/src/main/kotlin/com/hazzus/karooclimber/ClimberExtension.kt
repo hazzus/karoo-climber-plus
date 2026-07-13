@@ -68,7 +68,10 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         navigationRepo.start()
 
         consumerIds += karooSystem.addConsumer<RideState> { state ->
-            rideActive.value = state is RideState.Recording || state is RideState.Paused
+            val active = state is RideState.Recording || state is RideState.Paused
+            // ride ended: forget completed climbs so re-riding the route starts at 0/N
+            if (!active && rideActive.value) engine.reset()
+            rideActive.value = active
         }
         consumerIds += karooSystem.addConsumer<UserProfile> { profile ->
             imperial.value =
@@ -134,7 +137,12 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
                     while (enabled) {
                         // loop the whole demo route so all chip/list/climb states show
                         val next = demoProgress.value + DEMO_SPEED_MPS
-                        demoProgress.value = if (next > 4900.0) 0.0 else next
+                        if (next > 4900.0) {
+                            engine.reset() // same routeKey each loop — drop completed climbs
+                            demoProgress.value = 0.0
+                        } else {
+                            demoProgress.value = next
+                        }
                         delay(1000)
                     }
                 }

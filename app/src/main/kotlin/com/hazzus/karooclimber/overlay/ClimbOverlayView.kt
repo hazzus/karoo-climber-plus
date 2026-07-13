@@ -16,6 +16,7 @@ import android.view.MotionEvent
 import android.view.View
 import com.hazzus.karooclimber.R
 import com.hazzus.karooclimber.data.ClimbData
+import com.hazzus.karooclimber.data.ClimbEntry
 import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.data.ElevationProfile
 import com.hazzus.karooclimber.overlay.ViewModeMachine.PanelSize
@@ -241,11 +242,11 @@ class ClimbOverlayView(context: Context) : View(context) {
                 s.climbs,
                 s.upcoming.firstOrNull()?.let { formatValue(it.startDistance - s.progress) },
                 listScrollPx,
-                s.climbs.map { climb ->
+                s.climbs.map { entry ->
                     when {
-                        s.progress >= climb.endDistance -> "done"
-                        s.progress >= climb.startDistance -> "now"
-                        else -> formatKm(climb.startDistance - s.progress)
+                        entry.done -> "done"
+                        s.progress >= entry.climb.startDistance -> "now"
+                        else -> formatKm(entry.climb.startDistance - s.progress)
                     }
                 },
             )
@@ -801,7 +802,11 @@ class ClimbOverlayView(context: Context) : View(context) {
             )
         }
 
-        val rows = if (scrollable) s.climbs else s.upcoming.take(limit)
+        val rows = if (scrollable) {
+            s.climbs
+        } else {
+            s.upcoming.take(limit).map { ClimbEntry(it, done = false) }
+        }
         if (rows.isEmpty()) {
             subTextPaint.textSize = headerH * 0.45f
             subTextPaint.textAlign = Paint.Align.CENTER
@@ -817,9 +822,9 @@ class ClimbOverlayView(context: Context) : View(context) {
         canvas.clipRect(0f, listTop, width.toFloat(), height - pad)
         val rowPad = width * 0.045f
         var y = listTop - if (scrollable) listScrollPx else 0f
-        for (climb in rows) {
+        for (entry in rows) {
             if (y + rowH > listTop && y < height) {
-                drawClimbRow(canvas, s, climb, RectF(rowPad, y, width - rowPad, y + rowH))
+                drawClimbRow(canvas, s, entry, RectF(rowPad, y, width - rowPad, y + rowH))
             }
             y += rowH + gap
         }
@@ -829,8 +834,10 @@ class ClimbOverlayView(context: Context) : View(context) {
         lastListAreaHeight = height - pad - listTop
     }
 
-    private fun drawClimbRow(canvas: Canvas, s: ClimbUiState.Shown, climb: ClimbData, rect: RectF) {
-        val done = s.progress >= climb.endDistance
+    private fun drawClimbRow(canvas: Canvas, s: ClimbUiState.Shown, entry: ClimbEntry, rect: RectF) {
+        val climb = entry.climb
+        // done climbs may carry pre-reroute distances — never compare them to progress
+        val done = entry.done
         rowPaint.color = if (done) 0xFF4A4A4A.toInt() else palette.colorFor(climb.avgGrade)
         canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, rowPaint)
 
