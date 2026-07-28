@@ -201,12 +201,19 @@ private fun SettingsScreen(
         }
 
         // ---- Position & size ----
-        SectionTitle("Position")
-        RadioRow("Top", settings.anchor == OverlayAnchor.TOP) {
-            update { it.copy(anchor = OverlayAnchor.TOP) }
+        SectionTitle("Chip position")
+        RadioRow("Bottom", settings.chipAnchor == OverlayAnchor.BOTTOM) {
+            update { it.copy(chipAnchor = OverlayAnchor.BOTTOM) }
         }
-        RadioRow("Bottom", settings.anchor == OverlayAnchor.BOTTOM) {
-            update { it.copy(anchor = OverlayAnchor.BOTTOM) }
+        RadioRow("Top", settings.chipAnchor == OverlayAnchor.TOP) {
+            update { it.copy(chipAnchor = OverlayAnchor.TOP) }
+        }
+        SectionTitle("Drawer position")
+        RadioRow("Bottom", settings.drawerAnchor == OverlayAnchor.BOTTOM) {
+            update { it.copy(drawerAnchor = OverlayAnchor.BOTTOM) }
+        }
+        RadioRow("Top", settings.drawerAnchor == OverlayAnchor.TOP) {
+            update { it.copy(drawerAnchor = OverlayAnchor.TOP) }
         }
         SectionTitle("Height: ${settings.heightPercent}%")
         Slider(

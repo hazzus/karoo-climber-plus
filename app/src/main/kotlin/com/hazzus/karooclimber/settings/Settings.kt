@@ -2,7 +2,7 @@ package com.hazzus.karooclimber.settings
 
 import io.hammerhead.karooext.models.DataType
 
-/** Where the overlay panel is anchored vertically. */
+/** Where an overlay panel is anchored vertically (per size). */
 enum class OverlayAnchor { TOP, BOTTOM }
 
 /** Base display mode for the climb profile. */
@@ -372,7 +372,10 @@ data class Settings(
     val triggerDistanceM: Double = 500.0,
     /** Pop the chip open into the drawer when a climb becomes active. */
     val autoExpand: Boolean = true,
-    val anchor: OverlayAnchor = OverlayAnchor.TOP,
+    /** Where the permanent chip sits — bottom by default to stay out of the way. */
+    val chipAnchor: OverlayAnchor = OverlayAnchor.BOTTOM,
+    /** Where the expanded drawer sits; the full screen is always bottom. */
+    val drawerAnchor: OverlayAnchor = OverlayAnchor.BOTTOM,
     /** Panel height as % of screen height. */
     val heightPercent: Int = 40,
     /** Overlay opacity 75..100. */

@@ -1,6 +1,7 @@
 package com.hazzus.karooclimber.settings
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -21,7 +22,10 @@ class SettingsRepo(private val context: Context) {
         val previewWindowsKm = stringPreferencesKey("preview_windows_km")
         val triggerDistanceM = doublePreferencesKey("trigger_distance_m")
         val autoExpand = booleanPreferencesKey("auto_expand")
+        /** Legacy single anchor (pre chip/drawer split); read once to migrate. */
         val anchor = stringPreferencesKey("anchor")
+        val chipAnchor = stringPreferencesKey("chip_anchor")
+        val drawerAnchor = stringPreferencesKey("drawer_anchor")
         val heightPercent = intPreferencesKey("height_percent")
         val opacityPercent = intPreferencesKey("opacity_percent")
         val demoMode = booleanPreferencesKey("demo_mode")
@@ -38,8 +42,8 @@ class SettingsRepo(private val context: Context) {
             previewWindowsKm = p[Keys.previewWindowsKm]?.parseWindows() ?: defaults.previewWindowsKm,
             triggerDistanceM = p[Keys.triggerDistanceM] ?: defaults.triggerDistanceM,
             autoExpand = p[Keys.autoExpand] ?: defaults.autoExpand,
-            anchor = p[Keys.anchor]?.let { runCatching { OverlayAnchor.valueOf(it) }.getOrNull() }
-                ?: defaults.anchor,
+            chipAnchor = p.anchor(Keys.chipAnchor, defaults.chipAnchor),
+            drawerAnchor = p.anchor(Keys.drawerAnchor, defaults.drawerAnchor),
             heightPercent = (p[Keys.heightPercent] ?: defaults.heightPercent).coerceIn(15, 100),
             opacityPercent = (p[Keys.opacityPercent] ?: defaults.opacityPercent).coerceIn(75, 100),
             demoMode = p[Keys.demoMode] ?: defaults.demoMode,
@@ -59,8 +63,8 @@ class SettingsRepo(private val context: Context) {
                     ?: defaults.previewWindowsKm,
                 triggerDistanceM = p[Keys.triggerDistanceM] ?: defaults.triggerDistanceM,
                 autoExpand = p[Keys.autoExpand] ?: defaults.autoExpand,
-                anchor = p[Keys.anchor]?.let { runCatching { OverlayAnchor.valueOf(it) }.getOrNull() }
-                    ?: defaults.anchor,
+                chipAnchor = p.anchor(Keys.chipAnchor, defaults.chipAnchor),
+                drawerAnchor = p.anchor(Keys.drawerAnchor, defaults.drawerAnchor),
                 heightPercent = p[Keys.heightPercent] ?: defaults.heightPercent,
                 opacityPercent = p[Keys.opacityPercent] ?: defaults.opacityPercent,
                 demoMode = p[Keys.demoMode] ?: defaults.demoMode,
@@ -73,13 +77,23 @@ class SettingsRepo(private val context: Context) {
             p[Keys.previewWindowsKm] = next.previewWindowsKm.joinToString(",")
             p[Keys.triggerDistanceM] = next.triggerDistanceM
             p[Keys.autoExpand] = next.autoExpand
-            p[Keys.anchor] = next.anchor.name
+            p[Keys.chipAnchor] = next.chipAnchor.name
+            p[Keys.drawerAnchor] = next.drawerAnchor.name
             p[Keys.heightPercent] = next.heightPercent
             p[Keys.opacityPercent] = next.opacityPercent
             p[Keys.demoMode] = next.demoMode
             p[Keys.fullFields] = next.fullFields.joinToString(",") { it.name }
         }
     }
+
+    /** Resolve an anchor, falling back to the legacy single [Keys.anchor] then [default]. */
+    private fun Preferences.anchor(key: Preferences.Key<String>, default: OverlayAnchor): OverlayAnchor {
+        val legacy = get(Keys.anchor)?.toAnchor()
+        return get(key)?.toAnchor() ?: legacy ?: default
+    }
+
+    private fun String.toAnchor(): OverlayAnchor? =
+        runCatching { OverlayAnchor.valueOf(this) }.getOrNull()
 
     private fun String.parseWindows(): List<Double>? =
         split(',')

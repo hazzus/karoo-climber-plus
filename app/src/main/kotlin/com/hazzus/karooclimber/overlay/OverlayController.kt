@@ -132,8 +132,14 @@ class OverlayController(private val service: ClimberExtension) {
         val height: Int
         when (size) {
             ViewModeMachine.PanelSize.CHIP -> {
-                width = (metrics.widthPixels * CHIP_WIDTH_FRACTION).toInt()
                 height = (metrics.heightPixels * CHIP_HEIGHT_FRACTION).toInt()
+                // size to the text inside; quantized so a ticking digit doesn't
+                // relayout the window every second
+                val minW = (metrics.widthPixels * CHIP_MIN_WIDTH_FRACTION).toInt()
+                val maxW = (metrics.widthPixels * CHIP_MAX_WIDTH_FRACTION).toInt()
+                val step = (CHIP_WIDTH_STEP_DP * metrics.density).toInt().coerceAtLeast(1)
+                val content = v.chipContentWidth(height)
+                width = (((content + step - 1) / step) * step).coerceIn(minW, maxW)
             }
             ViewModeMachine.PanelSize.EXPANDED -> {
                 width = metrics.widthPixels
@@ -162,24 +168,19 @@ class OverlayController(private val service: ClimberExtension) {
                 or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = when {
-                // full screen sits at the bottom so the status bar stays visible
-                size == ViewModeMachine.PanelSize.FULL -> Gravity.BOTTOM
-                settings.anchor == OverlayAnchor.TOP -> Gravity.TOP
-                else -> Gravity.BOTTOM
-            } or Gravity.CENTER_HORIZONTAL
+            // chip and drawer anchor independently; the full screen is always bottom
+            val anchor = settings.anchorFor(size)
+            gravity =
+                (if (anchor == OverlayAnchor.TOP) Gravity.TOP else Gravity.BOTTOM) or
+                    Gravity.CENTER_HORIZONTAL
             // top-anchored panels start below the Karoo status bar — the same
             // strip FULL keeps visible by stopping at 92%
-            if (size != ViewModeMachine.PanelSize.FULL &&
-                settings.anchor == OverlayAnchor.TOP
-            ) {
+            if (size != ViewModeMachine.PanelSize.FULL && anchor == OverlayAnchor.TOP) {
                 y = (metrics.heightPixels * (1 - FULL_HEIGHT_FRACTION)).toInt()
             }
-            // keep the bottom chip clear of Karoo's native drawers; at the top
-            // the status-bar inset is enough
-            if (size == ViewModeMachine.PanelSize.CHIP &&
-                settings.anchor == OverlayAnchor.BOTTOM
-            ) {
+            // keep the bottom chip clear of Karoo's native drawers / turn-by-turn
+            // banner; at the top the status-bar inset is enough
+            if (size == ViewModeMachine.PanelSize.CHIP && anchor == OverlayAnchor.BOTTOM) {
                 y = (metrics.heightPixels * CHIP_EDGE_OFFSET_FRACTION).toInt()
             }
             alpha = settings.opacityPercent / 100f
@@ -229,9 +230,12 @@ class OverlayController(private val service: ClimberExtension) {
     companion object {
         private const val CHANNEL_ID = "climber-overlay"
         private const val NOTIFICATION_ID = 0x201
-        private const val CHIP_WIDTH_FRACTION = 0.45
-        private const val CHIP_HEIGHT_FRACTION = 0.09
-        private const val CHIP_EDGE_OFFSET_FRACTION = 0.02
+        // chip width follows its text, clamped to this range and stepped to damp jitter
+        private const val CHIP_MIN_WIDTH_FRACTION = 0.4
+        private const val CHIP_MAX_WIDTH_FRACTION = 0.9
+        private const val CHIP_WIDTH_STEP_DP = 8
+        private const val CHIP_HEIGHT_FRACTION = 0.08
+        private const val CHIP_EDGE_OFFSET_FRACTION = 0.03
         private const val FULL_HEIGHT_FRACTION = 0.92
     }
 }

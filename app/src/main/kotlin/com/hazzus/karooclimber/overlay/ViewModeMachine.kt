@@ -1,5 +1,15 @@
 package com.hazzus.karooclimber.overlay
 
+import com.hazzus.karooclimber.settings.OverlayAnchor
+import com.hazzus.karooclimber.settings.Settings
+
+/** Anchor for a panel of [size]; the full screen is always bottom (keeps the status bar visible). */
+fun Settings.anchorFor(size: ViewModeMachine.PanelSize): OverlayAnchor = when (size) {
+    ViewModeMachine.PanelSize.CHIP -> chipAnchor
+    ViewModeMachine.PanelSize.EXPANDED -> drawerAnchor
+    ViewModeMachine.PanelSize.FULL -> OverlayAnchor.BOTTOM
+}
+
 /**
  * Tap-to-cycle display mode state:
  *   BASE -> [ALT ->] PREVIEW(x1) -> PREVIEW(x2) -> ... -> BASE

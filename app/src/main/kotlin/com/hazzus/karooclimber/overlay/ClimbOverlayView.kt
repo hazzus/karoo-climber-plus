@@ -110,8 +110,8 @@ class ClimbOverlayView(context: Context) : View(context) {
                 if (abs(dy) < SWIPE_MIN_DISTANCE_PX || abs(dy) < abs(e2.x - e1.x)) return false
                 val flingDown = dy > 0 && velocityY > SWIPE_MIN_VELOCITY
                 val flingUp = dy < 0 && velocityY < -SWIPE_MIN_VELOCITY
-                // a top drawer opens downward, so grow/shrink directions invert
-                val topAnchored = settings.anchor == OverlayAnchor.TOP
+                // a top-anchored panel opens downward, so grow/shrink directions invert
+                val topAnchored = settings.anchorFor(machine.size) == OverlayAnchor.TOP
                 val shrinks = if (topAnchored) flingUp else flingDown
                 val grows = if (topAnchored) flingDown else flingUp
                 val scrollableList = machine.size == PanelSize.FULL && state?.active == null
@@ -358,38 +358,71 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     // ------------------------------------------------------------------- chip
 
+    /** What the chip renders — a grade+distance row on the climb, or a single line. */
+    private sealed interface ChipContent {
+        /** grade [dist-to icon] distance-to-top, shown once on the climb. */
+        data class Row(val grade: String, val dist: String) : ChipContent
+
+        data class Single(val text: String) : ChipContent
+    }
+
+    private fun chipContent(s: ClimbUiState.Shown): ChipContent {
+        val active = s.active
+        return when {
+            active != null && active.distanceToStart <= 0 -> ChipContent.Row(
+                grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%",
+                dist = formatValue(active.distanceToTop),
+            )
+            active == null -> ChipContent.Single("CLIMBS ${s.completedCount}/${s.totalCount}")
+            else -> ChipContent.Single("IN ${formatValue(active.distanceToStart)}")
+        }
+    }
+
+    /**
+     * Width the chip window needs for its current content at [heightPx] tall,
+     * including side padding. The window sizes to the text (see OverlayController);
+     * the pill's widest point is at the baseline, so padding can stay small.
+     */
+    fun chipContentWidth(heightPx: Int): Int {
+        val s = state ?: return 0
+        chipTextPaint.textSize = heightPx * CHIP_TEXT_FRACTION
+        val contentW = when (val c = chipContent(s)) {
+            is ChipContent.Row -> {
+                val iconH = chipTextPaint.textSize * 0.54f
+                val gap = chipTextPaint.textSize * 0.3f
+                chipTextPaint.measureText(c.grade) + gap +
+                    iconWidth(distToIcon, iconH) + gap + chipTextPaint.measureText(c.dist)
+            }
+            is ChipContent.Single -> chipTextPaint.measureText(c.text)
+        }
+        return (contentW + heightPx * CHIP_SIDE_PADDING_FRACTION).toInt()
+    }
+
     private fun drawChip(canvas: Canvas, s: ClimbUiState.Shown) {
         val r = height / 2f
         canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), r, r, chipBgPaint)
-        val active = s.active
-        chipTextPaint.textSize = height * 0.45f
+        chipTextPaint.textSize = height * CHIP_TEXT_FRACTION
         val baseline = height / 2f - (chipTextPaint.ascent() + chipTextPaint.descent()) / 2f
 
-        if (active != null && active.distanceToStart <= 0) {
-            // grade [dist-to icon] distance-to-top; icon 3/4 of the digits'
-            // visible height, bottom on the baseline (same as the header)
-            val grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%"
-            val dist = formatValue(active.distanceToTop)
-            val iconH = chipTextPaint.textSize * 0.54f
-            val gap = chipTextPaint.textSize * 0.3f
-            chipTextPaint.textAlign = Paint.Align.LEFT
-            val total = chipTextPaint.measureText(grade) + gap +
-                iconWidth(distToIcon, iconH) + gap + chipTextPaint.measureText(dist)
-            var x = (width - total) / 2f
-            canvas.drawText(grade, x, baseline, chipTextPaint)
-            x += chipTextPaint.measureText(grade) + gap
-            x += drawIcon(canvas, distToIcon, x, baseline, iconH) + gap
-            canvas.drawText(dist, x, baseline, chipTextPaint)
-            return
+        when (val c = chipContent(s)) {
+            is ChipContent.Row -> {
+                // icon 3/4 of the digits' visible height, bottom on the baseline
+                val iconH = chipTextPaint.textSize * 0.54f
+                val gap = chipTextPaint.textSize * 0.3f
+                chipTextPaint.textAlign = Paint.Align.LEFT
+                val total = chipTextPaint.measureText(c.grade) + gap +
+                    iconWidth(distToIcon, iconH) + gap + chipTextPaint.measureText(c.dist)
+                var x = (width - total) / 2f
+                canvas.drawText(c.grade, x, baseline, chipTextPaint)
+                x += chipTextPaint.measureText(c.grade) + gap
+                x += drawIcon(canvas, distToIcon, x, baseline, iconH) + gap
+                canvas.drawText(c.dist, x, baseline, chipTextPaint)
+            }
+            is ChipContent.Single -> {
+                chipTextPaint.textAlign = Paint.Align.CENTER
+                canvas.drawText(c.text, width / 2f, baseline, chipTextPaint)
+            }
         }
-
-        val text = if (active == null) {
-            "CLIMBS ${s.completedCount}/${s.totalCount}"
-        } else {
-            "IN ${formatValue(active.distanceToStart)}"
-        }
-        chipTextPaint.textAlign = Paint.Align.CENTER
-        canvas.drawText(text, width / 2f, baseline, chipTextPaint)
     }
 
     // ---------------------------------------------------------- climb profile
@@ -935,6 +968,10 @@ class ClimbOverlayView(context: Context) : View(context) {
         "%.1f".format(if (imperial) meters / 1609.344 else meters / 1000.0)
 
     companion object {
+        /** Chip text size and side padding, both as a fraction of chip height. */
+        private const val CHIP_TEXT_FRACTION = 0.75f
+        private const val CHIP_SIDE_PADDING_FRACTION = 0.5f
+
         /** Leave headroom above the profile inside the chart. */
         private const val PROFILE_MAX_FRACTION = 0.88f
 
