@@ -15,7 +15,7 @@ fun Settings.anchorFor(size: ViewModeMachine.PanelSize): OverlayAnchor = when (s
  *   BASE -> [ALT ->] PREVIEW(x1) -> PREVIEW(x2) -> ... -> BASE
  *
  * BASE renders the settings' base display mode; ALT is the other base rendering
- * and is included in the cycle only when the base mode setting is BOTH.
+ * (full vs remaining) and is included whenever the caller passes includeAlt.
  * Preview windows where `remaining < X` are skipped; if remaining drops below
  * the active window mid-ride, the mode auto-reverts to BASE.
  * Also tracks the collapsed(chip)/expanded state (gesture toggle).

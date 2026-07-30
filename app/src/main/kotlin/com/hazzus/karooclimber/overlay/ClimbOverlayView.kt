@@ -30,6 +30,7 @@ import com.hazzus.karooclimber.settings.Settings
 import io.hammerhead.karooext.models.DataType
 import java.util.Calendar
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -56,6 +57,10 @@ class ClimbOverlayView(context: Context) : View(context) {
     private var activeKey: Pair<Double, Double>? = null
     private var listScrollPx = 0f
     private var sysValues: Map<String, Map<String, Double>> = emptyMap()
+
+    /** Momentary banner naming the view mode, shown right after a tap-cycle switch. */
+    private var modeFlashText = ""
+    private var modeFlashUntil = 0L
 
     /** Controller hook: window size must change. */
     var onRelayoutNeeded: (() -> Unit)? = null
@@ -173,11 +178,24 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     private fun cycleMode(s: ClimbUiState.Shown) {
         val active = s.active ?: return
+        // always run FULL -> REMAINING -> preview windows, whatever the base setting
         machine.next(
-            includeAlt = settings.baseMode == BaseMode.BOTH,
+            includeAlt = true,
             windowsMeters = settings.previewWindowsKm.map { it * 1000.0 },
             remainingMeters = active.distanceToTop,
         )
+        // flash the newly selected view mode; it fades out on its own
+        modeFlashText = modeFlashLabel(s, active)
+        modeFlashUntil = System.currentTimeMillis() + MODE_FLASH_MS
+    }
+
+    /** Banner label for the current mode: "NEXT <size>", or FULL / REMAINING by window. */
+    private fun modeFlashLabel(s: ClimbUiState.Shown, active: ClimbUiState.ActiveClimb): String {
+        (machine.mode as? ViewModeMachine.Mode.Preview)?.let {
+            return "NEXT ${formatDistance(it.windowMeters)}"
+        }
+        val winStart = displayWindow(s, active).first
+        return if (winStart <= active.climb.startDistance + 1.0) "FULL" else "REMAINING"
     }
 
     private inline fun resize(change: () -> Unit) {
@@ -321,6 +339,17 @@ class ClimbOverlayView(context: Context) : View(context) {
     private val splicePaint = Paint().apply {
         color = 0x40000000
         strokeWidth = 2f
+    }
+    // faint vertical rules on the profile background, one per km / mi
+    private val gridPaint = Paint().apply {
+        color = 0x40FFFFFF
+        strokeWidth = 1.5f
+    }
+    // momentary view-mode banner, drawn large straight over the profile (see drawModeFlash)
+    private val flashTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        typeface = plexCondensed
+        textAlign = Paint.Align.CENTER
     }
 
     // Hammerhead glyphs replacing the → / ↗ text arrows (white fill baked in)
@@ -510,9 +539,10 @@ class ClimbOverlayView(context: Context) : View(context) {
         drawHeader(canvas, s, active, pad, headerH)
 
         val stripH = height * if (withFields) 0.08f else 0.14f
+        val chartBottom = if (withFields) height * 0.47f else height - pad - stripH
+        val chart = RectF(pad, headerH, width - pad, chartBottom)
+        drawProfile(canvas, s, active, chart)
         if (withFields) {
-            val chartBottom = height * 0.47f
-            drawProfile(canvas, s, active, RectF(pad, headerH, width - pad, chartBottom))
             drawChunkStrip(canvas, s, active, RectF(pad, chartBottom, width - pad, chartBottom + stripH))
             drawFields(
                 canvas,
@@ -521,11 +551,56 @@ class ClimbOverlayView(context: Context) : View(context) {
                 RectF(pad, chartBottom + stripH + pad, width - pad, height - pad),
             )
         } else {
-            val chartBottom = height - pad - stripH
-            drawProfile(canvas, s, active, RectF(pad, headerH, width - pad, chartBottom))
             drawChunkStrip(canvas, s, active, RectF(pad, chartBottom, width - pad, height - pad))
         }
+
+        drawModeFlash(canvas, chart)
     }
+
+    /**
+     * Momentary banner naming the just-selected view mode, sized to span almost the
+     * whole width of the [chart] and laid straight over the profile on a transparent
+     * background — a soft shadow keeps it legible over the colored silhouette. Fades
+     * out over [MODE_FLASH_MS], driving its own frames until it expires.
+     */
+    private fun drawModeFlash(canvas: Canvas, chart: RectF) {
+        val remaining = modeFlashUntil - System.currentTimeMillis()
+        if (remaining <= 0L) return
+        val total = MODE_FLASH_MS.toFloat()
+        val elapsed = total - remaining
+        val fadeStart = total * 0.4f
+        val alpha = if (elapsed < fadeStart) {
+            1f
+        } else {
+            (1f - (elapsed - fadeStart) / (total - fadeStart)).coerceIn(0f, 1f)
+        }
+
+        // one text size for every label so FULL / REMAINING / NEXT x share a height:
+        // scale so the widest label the banner can show fills ~94% of the width
+        flashTextPaint.textSize = 100f
+        val widest = modeFlashLabels().maxOf { flashTextPaint.measureText(it) }.coerceAtLeast(1f)
+        flashTextPaint.textSize = min(100f * chart.width() * 0.94f / widest, chart.height() * 0.8f)
+
+        val cx = chart.centerX()
+        val baseline = chart.centerY() - (flashTextPaint.ascent() + flashTextPaint.descent()) / 2f
+        flashTextPaint.setShadowLayer(
+            flashTextPaint.textSize * 0.09f,
+            0f,
+            flashTextPaint.textSize * 0.03f,
+            Color.argb((0xAA * alpha).toInt(), 0, 0, 0),
+        )
+        // peak opacity MODE_FLASH_ALPHA, fading to 0
+        flashTextPaint.alpha = (0xFF * MODE_FLASH_ALPHA * alpha).toInt()
+        canvas.drawText(modeFlashText, cx, baseline, flashTextPaint)
+        flashTextPaint.clearShadowLayer()
+
+        postInvalidateOnAnimation()
+    }
+
+    /** Every label the banner can show, used to pick one shared text size. */
+    private fun modeFlashLabels(): List<String> =
+        listOf("FULL", "REMAINING") +
+            settings.previewWindowsKm.map { "NEXT ${formatDistance(it * 1000.0)}" }
 
     /**
      * Native Climber style strip: grades of the next five 100 m chunks ahead of
@@ -695,6 +770,16 @@ class ClimbOverlayView(context: Context) : View(context) {
                     )
                 }
             }
+        }
+
+        // distance grid: a faint vertical rule at every whole km (or mile), drawn
+        // on the background so the colored silhouette paints over it
+        val gridUnit = if (imperial) 1609.344 else 1000.0
+        var mark = (floor(winStart / gridUnit) + 1) * gridUnit
+        while (mark < winEnd) {
+            val gx = xOf(mark)
+            canvas.drawLine(gx, chart.top, gx, chart.bottom, gridPaint)
+            mark += gridUnit
         }
 
         canvas.save()
@@ -986,7 +1071,11 @@ class ClimbOverlayView(context: Context) : View(context) {
                 BaseMode.REMAINING -> pos to climb.endDistance
                 BaseMode.FULL, BaseMode.BOTH -> climb.startDistance to climb.endDistance
             }
-            is ViewModeMachine.Mode.Alt -> pos to climb.endDistance
+            // Alt is always the *other* base rendering than Base
+            is ViewModeMachine.Mode.Alt -> when (settings.baseMode) {
+                BaseMode.REMAINING -> climb.startDistance to climb.endDistance
+                BaseMode.FULL, BaseMode.BOTH -> pos to climb.endDistance
+            }
             is ViewModeMachine.Mode.Preview ->
                 pos to min(pos + m.windowMeters, climb.endDistance)
         }
@@ -1056,5 +1145,11 @@ class ClimbOverlayView(context: Context) : View(context) {
         /** Swipe gesture thresholds. */
         private const val SWIPE_MIN_DISTANCE_PX = 60f
         private const val SWIPE_MIN_VELOCITY = 300f
+
+        /** How long the view-mode banner stays up (hold, then fade). */
+        private const val MODE_FLASH_MS = 900L
+
+        /** Peak opacity of the banner text (fades from here to fully transparent). */
+        private const val MODE_FLASH_ALPHA = 0.7f
     }
 }
