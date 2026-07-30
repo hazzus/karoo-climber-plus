@@ -2,8 +2,13 @@ package com.hazzus.karooclimber.settings
 
 import io.hammerhead.karooext.models.DataType
 
-/** Where an overlay panel is anchored vertically (per size). */
-enum class OverlayAnchor { TOP, BOTTOM }
+/**
+ * Where an overlay panel is anchored (per size).
+ *
+ * [BOTTOM_SPLIT] is chip-only: two chips hugging the bottom-left and bottom-right
+ * screen edges instead of one centered pill (keeps the bottom-center clear).
+ */
+enum class OverlayAnchor { TOP, BOTTOM, BOTTOM_SPLIT }
 
 /** Base display mode for the climb profile. */
 enum class BaseMode {

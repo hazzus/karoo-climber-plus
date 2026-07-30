@@ -133,13 +133,18 @@ class OverlayController(private val service: ClimberExtension) {
         when (size) {
             ViewModeMachine.PanelSize.CHIP -> {
                 height = (metrics.heightPixels * CHIP_HEIGHT_FRACTION).toInt()
-                // size to the text inside; quantized so a ticking digit doesn't
-                // relayout the window every second
-                val minW = (metrics.widthPixels * CHIP_MIN_WIDTH_FRACTION).toInt()
-                val maxW = (metrics.widthPixels * CHIP_MAX_WIDTH_FRACTION).toInt()
-                val step = (CHIP_WIDTH_STEP_DP * metrics.density).toInt().coerceAtLeast(1)
-                val content = v.chipContentWidth(height)
-                width = (((content + step - 1) / step) * step).coerceIn(minW, maxW)
+                width = if (settings.chipAnchor == OverlayAnchor.BOTTOM_SPLIT) {
+                    // full-width bar; the view draws the two edge chips itself
+                    metrics.widthPixels
+                } else {
+                    // size to the text inside; quantized so a ticking digit doesn't
+                    // relayout the window every second
+                    val minW = (metrics.widthPixels * CHIP_MIN_WIDTH_FRACTION).toInt()
+                    val maxW = (metrics.widthPixels * CHIP_MAX_WIDTH_FRACTION).toInt()
+                    val step = (CHIP_WIDTH_STEP_DP * metrics.density).toInt().coerceAtLeast(1)
+                    val content = v.chipContentWidth(height)
+                    (((content + step - 1) / step) * step).coerceIn(minW, maxW)
+                }
             }
             ViewModeMachine.PanelSize.EXPANDED -> {
                 width = metrics.widthPixels
@@ -168,19 +173,19 @@ class OverlayController(private val service: ClimberExtension) {
                 or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            // chip and drawer anchor independently; the full screen is always bottom
-            val anchor = settings.anchorFor(size)
+            // chip and drawer anchor independently; the full screen is always bottom.
+            // BOTTOM_SPLIT positions like BOTTOM — only the in-window layout differs.
+            val topAnchored = settings.anchorFor(size) == OverlayAnchor.TOP
             gravity =
-                (if (anchor == OverlayAnchor.TOP) Gravity.TOP else Gravity.BOTTOM) or
-                    Gravity.CENTER_HORIZONTAL
+                (if (topAnchored) Gravity.TOP else Gravity.BOTTOM) or Gravity.CENTER_HORIZONTAL
             // top-anchored panels start below the Karoo status bar — the same
             // strip FULL keeps visible by stopping at 92%
-            if (size != ViewModeMachine.PanelSize.FULL && anchor == OverlayAnchor.TOP) {
+            if (size != ViewModeMachine.PanelSize.FULL && topAnchored) {
                 y = (metrics.heightPixels * (1 - FULL_HEIGHT_FRACTION)).toInt()
             }
             // keep the bottom chip clear of Karoo's native drawers / turn-by-turn
             // banner; at the top the status-bar inset is enough
-            if (size == ViewModeMachine.PanelSize.CHIP && anchor == OverlayAnchor.BOTTOM) {
+            if (size == ViewModeMachine.PanelSize.CHIP && !topAnchored) {
                 y = (metrics.heightPixels * CHIP_EDGE_OFFSET_FRACTION).toInt()
             }
             alpha = settings.opacityPercent / 100f

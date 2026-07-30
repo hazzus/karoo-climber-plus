@@ -205,6 +205,9 @@ private fun SettingsScreen(
         RadioRow("Bottom", settings.chipAnchor == OverlayAnchor.BOTTOM) {
             update { it.copy(chipAnchor = OverlayAnchor.BOTTOM) }
         }
+        RadioRow("Bottom split (two edges)", settings.chipAnchor == OverlayAnchor.BOTTOM_SPLIT) {
+            update { it.copy(chipAnchor = OverlayAnchor.BOTTOM_SPLIT) }
+        }
         RadioRow("Top", settings.chipAnchor == OverlayAnchor.TOP) {
             update { it.copy(chipAnchor = OverlayAnchor.TOP) }
         }

@@ -327,6 +327,10 @@ class ClimbOverlayView(context: Context) : View(context) {
     private val distToIcon: Drawable? = context.getDrawable(R.drawable.ic_dist_to)
     private val elevGainIcon: Drawable? = context.getDrawable(R.drawable.ic_elev_gain)
     private val doneIcon: Drawable? = context.getDrawable(R.drawable.ic_done)
+    // mountain glyph tinted to match the white chip text (split-chip idle label)
+    private val climbIcon: Drawable? =
+        context.getDrawable(R.drawable.ic_climber)?.apply { setTint(Color.WHITE) }
+    private val splitChipPath = Path()
 
     /**
      * Draws [icon] with its bottom on the text [baseline], scaled to [size] height.
@@ -399,6 +403,10 @@ class ClimbOverlayView(context: Context) : View(context) {
     }
 
     private fun drawChip(canvas: Canvas, s: ClimbUiState.Shown) {
+        if (settings.chipAnchor == OverlayAnchor.BOTTOM_SPLIT) {
+            drawSplitChips(canvas, s)
+            return
+        }
         val r = height / 2f
         canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), r, r, chipBgPaint)
         chipTextPaint.textSize = height * CHIP_TEXT_FRACTION
@@ -423,6 +431,64 @@ class ClimbOverlayView(context: Context) : View(context) {
                 canvas.drawText(c.text, width / 2f, baseline, chipTextPaint)
             }
         }
+    }
+
+    /**
+     * BOTTOM_SPLIT chip: two tabs hugging the screen edges (square outer corner,
+     * rounded inner). Left is always shown; the right appears only on/approaching a
+     * climb. Text hugs its screen edge. A tap anywhere in the bar opens the drawer.
+     */
+    private fun drawSplitChips(canvas: Canvas, s: ClimbUiState.Shown) {
+        val h = height.toFloat()
+        val r = h / 2f
+        val chipW = width * SPLIT_CHIP_WIDTH_FRACTION
+        val pad = h * SPLIT_CHIP_EDGE_PAD_FRACTION
+        chipTextPaint.textSize = h * CHIP_TEXT_FRACTION
+        val baseline = h / 2f - (chipTextPaint.ascent() + chipTextPaint.descent()) / 2f
+        val active = s.active
+
+        // left tab
+        drawSplitBg(canvas, RectF(0f, 0f, chipW, h), leftEdge = true, r)
+        chipTextPaint.textAlign = Paint.Align.LEFT
+        when {
+            active == null -> {
+                // small climb icon + completed/total, kept clear of the tab edge;
+                // drop the icon past 9 climbs so the wider count still fits
+                var x = pad
+                if (s.totalCount <= 9) {
+                    val iconH = chipTextPaint.textSize * 0.55f
+                    x += drawIcon(canvas, climbIcon, x, baseline, iconH) + chipTextPaint.textSize * 0.25f
+                }
+                canvas.drawText("${s.completedCount}/${s.totalCount}", x, baseline, chipTextPaint)
+            }
+            active.distanceToStart > 0 -> canvas.drawText("IN", pad, baseline, chipTextPaint)
+            else -> {
+                val grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%"
+                canvas.drawText(grade, pad, baseline, chipTextPaint)
+            }
+        }
+
+        // right tab — only while a climb is approaching or underway
+        if (active != null) {
+            drawSplitBg(canvas, RectF(width - chipW, 0f, width.toFloat(), h), leftEdge = false, r)
+            chipTextPaint.textAlign = Paint.Align.RIGHT
+            val value = formatValue(
+                if (active.distanceToStart > 0) active.distanceToStart else active.distanceToTop,
+            )
+            canvas.drawText(value, width - pad, baseline, chipTextPaint)
+        }
+    }
+
+    private fun drawSplitBg(canvas: Canvas, rect: RectF, leftEdge: Boolean, r: Float) {
+        // square on the screen-edge side, rounded on the inner side
+        val radii = if (leftEdge) {
+            floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+        } else {
+            floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+        }
+        splitChipPath.reset()
+        splitChipPath.addRoundRect(rect, radii, Path.Direction.CW)
+        canvas.drawPath(splitChipPath, chipBgPaint)
     }
 
     // ---------------------------------------------------------- climb profile
@@ -971,6 +1037,10 @@ class ClimbOverlayView(context: Context) : View(context) {
         /** Chip text size and side padding, both as a fraction of chip height. */
         private const val CHIP_TEXT_FRACTION = 0.75f
         private const val CHIP_SIDE_PADDING_FRACTION = 0.5f
+
+        /** BOTTOM_SPLIT: each edge tab's width (fraction of screen) and text inset. */
+        private const val SPLIT_CHIP_WIDTH_FRACTION = 0.3f
+        private const val SPLIT_CHIP_EDGE_PAD_FRACTION = 0.3f
 
         /** Leave headroom above the profile inside the chart. */
         private const val PROFILE_MAX_FRACTION = 0.88f
