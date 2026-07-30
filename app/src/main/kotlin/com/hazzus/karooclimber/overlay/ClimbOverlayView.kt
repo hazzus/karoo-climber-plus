@@ -178,9 +178,10 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     private fun cycleMode(s: ClimbUiState.Shown) {
         val active = s.active ?: return
-        // always run FULL -> REMAINING -> preview windows, whatever the base setting
+        // FULL + REMAINING both in the cycle only when base mode is BOTH; otherwise
+        // the cycle honors the chosen base view (full-only or remaining-only)
         machine.next(
-            includeAlt = true,
+            includeAlt = settings.baseMode == BaseMode.BOTH,
             windowsMeters = settings.previewWindowsKm.map { it * 1000.0 },
             remainingMeters = active.distanceToTop,
         )
@@ -1071,11 +1072,7 @@ class ClimbOverlayView(context: Context) : View(context) {
                 BaseMode.REMAINING -> pos to climb.endDistance
                 BaseMode.FULL, BaseMode.BOTH -> climb.startDistance to climb.endDistance
             }
-            // Alt is always the *other* base rendering than Base
-            is ViewModeMachine.Mode.Alt -> when (settings.baseMode) {
-                BaseMode.REMAINING -> climb.startDistance to climb.endDistance
-                BaseMode.FULL, BaseMode.BOTH -> pos to climb.endDistance
-            }
+            is ViewModeMachine.Mode.Alt -> pos to climb.endDistance
             is ViewModeMachine.Mode.Preview ->
                 pos to min(pos + m.windowMeters, climb.endDistance)
         }
