@@ -11,7 +11,10 @@ package com.hazzus.karooclimber.data
  *    reroute re-bases their distances (and drops passed ones from the list),
  *    so completions are recorded separately, with the climb data frozen at
  *    completion time, and only for climbs the rider was observed on — climbs
- *    skipped by joining the route mid-way never count.
+ *    skipped by joining the route mid-way never count. A topped climb stays
+ *    topped for the rest of the ride: completions survive a reroute, a
+ *    route<->destination switch (routeKey change) and momentary null frames,
+ *    and are cleared only by [reset] on a real ride end.
  */
 class ClimbEngine(
     /** Extra meters past the trigger boundary required to re-activate after a drop-out. */
@@ -25,7 +28,11 @@ class ClimbEngine(
     private var riding: ClimbData? = null
     private val completed = mutableListOf<ClimbData>()
 
-    /** Forget all per-ride state (ride ended, demo loop wrapped). */
+    /**
+     * Forget all per-ride state, completed climbs included. Only a real ride end
+     * (or the demo loop wrapping) calls this — a reroute or a momentary data gap
+     * must not, so a climb topped earlier in the ride is never un-counted.
+     */
     fun reset() {
         routeKey = null
         shownKey = null
@@ -35,13 +42,19 @@ class ClimbEngine(
     }
 
     fun update(route: RouteData?, progress: Double?, triggerDistance: Double): ClimbUiState {
-        if (route == null || progress == null) {
-            reset()
-            return ClimbUiState.Hidden
-        }
+        // A momentary gap — reroute in progress, a missing distance-to-destination
+        // frame — must not wipe completions; only a real ride end does (see reset()
+        // callers). Hide for this frame but keep every per-ride value intact.
+        if (route == null || progress == null) return ClimbUiState.Hidden
+
         if (route.routeKey != routeKey) {
-            reset()
+            // New route mid-ride (reroute, or a route<->destination switch). The
+            // climbs ahead are re-based, so drop the per-climb tracking — but a
+            // climb already topped stays topped, so completed carries over untouched.
             routeKey = route.routeKey
+            shownKey = null
+            recentlyHiddenKey = null
+            riding = null
         }
         if (route.climbs.isEmpty() && completed.isEmpty()) return ClimbUiState.Hidden
 

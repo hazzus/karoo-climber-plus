@@ -201,12 +201,30 @@ class ClimbEngineTest {
     }
 
     @Test
-    fun `route change resets state`() {
+    fun `routeKey change keeps completed climbs and re-selects active`() {
         val engine = ClimbEngine()
-        activeAt(engine, 3000.0)
+        shownAt(engine, 3000.0) // riding climb A
+        shownAt(engine, 5000.0) // topped A
+        // a momentary gap mid-reroute must not reset anything
         assertEquals(ClimbUiState.Hidden, engine.update(null, null, trigger))
+        // switch to a different route (new key) — A stays topped
         val other = route.copy(routeKey = "other")
-        val state = engine.update(other, 3000.0, trigger) as ClimbUiState.Shown
-        assertTrue(state.active != null)
+        val kept = engine.update(other, 5000.0, trigger) as ClimbUiState.Shown
+        assertEquals(1, kept.completedCount)
+        assertTrue(kept.climbs.first().done)
+        assertEquals(route.climbs[0], kept.climbs.first().climb)
+        // active still re-selects on the new route; index counts the completed climb
+        val active = activeAt(engine, 6600.0)
+        assertEquals(1, active.index)
+    }
+
+    @Test
+    fun `ride end clears completed climbs`() {
+        val engine = ClimbEngine()
+        shownAt(engine, 3000.0) // riding climb A
+        shownAt(engine, 5000.0) // topped A
+        assertEquals(1, shownAt(engine, 5000.0).completedCount)
+        engine.reset() // ride ended
+        assertEquals(0, shownAt(engine, 5000.0).completedCount)
     }
 }
