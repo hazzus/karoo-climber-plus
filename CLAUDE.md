@@ -72,9 +72,14 @@ Data flows one way: karoo-ext events → repos → pure engine → overlay windo
   `ViewModeMachine` holds display mode (Base/Alt/Preview round-robin) and panel size;
   gestures: tap = expand chip / cycle modes, swipe up/down = resize, drag scrolls the
   full-screen list. Hardware buttons: the window is key-focusable except in CHIP;
-  bottom-left (KEYCODE_BACK) = shrink one step, the other three keys are replayed to
-  Karoo OS via `PerformHardwareAction` (physical presses only — virtual ones would
-  loop back into the focused overlay).
+  bottom-left (KEYCODE_BACK) = shrink one step. The other three (page nav) can't be
+  handed to Karoo while the overlay holds focus — replaying the press via
+  `PerformHardwareAction` just loops the injected key back into the focused overlay.
+  So on those presses the overlay drops focus (`forcedNonFocusable`), replays the
+  press once RideActivity is focused (`onWindowFocusChanged(false)`), then re-takes
+  focus after `REFOCUS_DELAY_MS` — long enough for the injected key to land first,
+  short enough that bottom-left still collapses. Replays re-enter as virtual keys and
+  are filtered by `deviceId` so they don't start another hand-off.
 - **`settings/`** — DataStore-backed `SettingsRepo`; `ClimbField` enum doubles as
   climb-derived fields (no `dataTypeId`) and Karoo system stream fields (with one).
   Compose UI only in `SettingsActivity` — the overlay deliberately avoids Compose.

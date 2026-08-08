@@ -42,8 +42,9 @@ import kotlin.math.roundToInt
  *
  * Gestures: tap = expand chip / cycle modes; swipe away from the anchored edge = grow,
  * toward it = shrink (up/down for a bottom drawer, down/up for a top one);
- * vertical drag scrolls the full list. Hardware: the bottom-left button shrinks
- * like the hide swipe (drawer/full only — the chip window never takes key focus).
+ * vertical drag scrolls the full list. Hardware buttons (drawer/full only — the chip
+ * window never takes key focus): bottom-left shrinks like the hide swipe; the other
+ * three are passed through to Karoo (page nav etc.) — see [dispatchKeyEvent].
  */
 @SuppressLint("ViewConstructor")
 class ClimbOverlayView(context: Context) : View(context) {
@@ -65,8 +66,17 @@ class ClimbOverlayView(context: Context) : View(context) {
     /** Controller hook: window size must change. */
     var onRelayoutNeeded: (() -> Unit)? = null
 
-    /** Controller hook: physical hardware key the overlay doesn't use itself. */
+    /** Controller hook: replay a hardware key to Karoo the overlay doesn't use itself. */
     var onHardwareKeyPassthrough: ((Int) -> Unit)? = null
+
+    /** Controller hook: make the overlay window key-focusable (true) or not (false). */
+    var onSetFocusable: ((Boolean) -> Unit)? = null
+
+    /** Hardware key to replay to Karoo once focus has actually left us; see [dispatchKeyEvent]. */
+    private var pendingHardwareAction: Int? = null
+
+    /** Re-takes key focus after a pass-through; a field so overlapping presses don't stack it. */
+    private val refocusRunnable = Runnable { onSetFocusable?.invoke(true) }
 
     val panelSize: PanelSize get() = machine.size
 
@@ -149,8 +159,11 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     // Key events only arrive while the window is focusable (drawer/full — never CHIP,
     // so the chip leaves all hardware buttons to Karoo). Bottom-left (BACK) shrinks
-    // like the hide swipe; the other buttons are handed back to Karoo OS via
-    // PerformHardwareAction so paging etc. keep working behind the panel.
+    // like the hide swipe; the other three (page nav) reach Karoo through a brief
+    // focus hand-off, since a focused overlay would otherwise swallow them: replaying
+    // the press while we hold focus just loops the injected key back to us. So we drop
+    // focus, replay it once RideActivity is focused (onWindowFocusChanged), then re-take
+    // focus after a short delay so the injected key lands first and BACK keeps working.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (machine.size == PanelSize.CHIP) return super.dispatchKeyEvent(event)
         when (event.keyCode) {
@@ -163,17 +176,36 @@ class ClimbOverlayView(context: Context) : View(context) {
             KeyEvent.KEYCODE_NAVIGATE_NEXT,
             KeyEvent.KEYCODE_NAVIGATE_IN,
             -> {
-                // physical presses only: PerformHardwareAction may inject a virtual
-                // copy back at this focused window, which must not be re-forwarded
+                // physical presses only: our replayed press re-enters here as a virtual
+                // key, which must not kick off another hand-off
                 if (event.action == KeyEvent.ACTION_UP &&
                     event.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD
                 ) {
-                    onHardwareKeyPassthrough?.invoke(event.keyCode)
+                    pendingHardwareAction = event.keyCode
+                    onSetFocusable?.invoke(false)
                 }
             }
             else -> return super.dispatchKeyEvent(event)
         }
         return true
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        val action = pendingHardwareAction
+        if (!hasWindowFocus && action != null) {
+            pendingHardwareAction = null
+            onHardwareKeyPassthrough?.invoke(action)
+            // delay re-taking focus so Karoo's injected key lands while RideActivity
+            // is still focused, instead of looping back to us
+            removeCallbacks(refocusRunnable)
+            postDelayed(refocusRunnable, REFOCUS_DELAY_MS)
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(refocusRunnable)
+        super.onDetachedFromWindow()
     }
 
     private fun cycleMode(s: ClimbUiState.Shown) {
@@ -1120,6 +1152,13 @@ class ClimbOverlayView(context: Context) : View(context) {
         "%.1f".format(if (imperial) meters / 1609.344 else meters / 1000.0)
 
     companion object {
+        /**
+         * How long the drawer stays non-focusable after replaying a hardware press,
+         * so Karoo's injected key reaches the ride app before we re-take focus for the
+         * bottom-left collapse. Tuned above the observed PerformHardwareAction latency.
+         */
+        private const val REFOCUS_DELAY_MS = 250L
+
         /** Chip text size and side padding, both as a fraction of chip height. */
         private const val CHIP_TEXT_FRACTION = 0.75f
         private const val CHIP_SIDE_PADDING_FRACTION = 0.5f
