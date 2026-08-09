@@ -28,7 +28,6 @@ class SettingsRepo(private val context: Context) {
         val drawerAnchor = stringPreferencesKey("drawer_anchor")
         val heightPercent = intPreferencesKey("height_percent")
         val opacityPercent = intPreferencesKey("opacity_percent")
-        val demoMode = booleanPreferencesKey("demo_mode")
         val fullFields = stringPreferencesKey("full_fields")
     }
 
@@ -46,7 +45,6 @@ class SettingsRepo(private val context: Context) {
             drawerAnchor = p.anchor(Keys.drawerAnchor, defaults.drawerAnchor),
             heightPercent = (p[Keys.heightPercent] ?: defaults.heightPercent).coerceIn(15, 100),
             opacityPercent = (p[Keys.opacityPercent] ?: defaults.opacityPercent).coerceIn(75, 100),
-            demoMode = p[Keys.demoMode] ?: defaults.demoMode,
             fullFields = p[Keys.fullFields]?.parseFields() ?: defaults.fullFields,
         )
     }
@@ -67,7 +65,6 @@ class SettingsRepo(private val context: Context) {
                 drawerAnchor = p.anchor(Keys.drawerAnchor, defaults.drawerAnchor),
                 heightPercent = p[Keys.heightPercent] ?: defaults.heightPercent,
                 opacityPercent = p[Keys.opacityPercent] ?: defaults.opacityPercent,
-                demoMode = p[Keys.demoMode] ?: defaults.demoMode,
                 fullFields = p[Keys.fullFields]?.parseFields() ?: defaults.fullFields,
             )
             val next = transform(current)
@@ -81,7 +78,6 @@ class SettingsRepo(private val context: Context) {
             p[Keys.drawerAnchor] = next.drawerAnchor.name
             p[Keys.heightPercent] = next.heightPercent
             p[Keys.opacityPercent] = next.opacityPercent
-            p[Keys.demoMode] = next.demoMode
             p[Keys.fullFields] = next.fullFields.joinToString(",") { it.name }
         }
     }

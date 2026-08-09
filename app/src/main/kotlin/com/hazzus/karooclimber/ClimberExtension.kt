@@ -1,12 +1,13 @@
 package com.hazzus.karooclimber
 
 import android.util.Log
-import com.hazzus.karooclimber.data.ClimbEngine
+import com.hazzus.karooclimber.data.ClimbInfo
+import com.hazzus.karooclimber.data.ClimbStateBuilder
+import com.hazzus.karooclimber.data.ClimbStreamRepo
 import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.data.NavigationRepo
 import com.hazzus.karooclimber.data.ProgressRepo
 import com.hazzus.karooclimber.data.progressAlongRoute
-import com.hazzus.karooclimber.debug.DemoData
 import com.hazzus.karooclimber.overlay.OverlayController
 import com.hazzus.karooclimber.settings.Settings
 import com.hazzus.karooclimber.settings.SettingsRepo
@@ -20,12 +21,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -41,13 +39,13 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
 
     private lateinit var navigationRepo: NavigationRepo
     private lateinit var progressRepo: ProgressRepo
+    private lateinit var climbStreamRepo: ClimbStreamRepo
     private lateinit var settingsRepo: SettingsRepo
     private lateinit var overlay: OverlayController
-    private val engine = ClimbEngine()
+    private val builder = ClimbStateBuilder()
 
     private val rideActive = MutableStateFlow(false)
     private val imperial = MutableStateFlow(false)
-    private val demoProgress = MutableStateFlow(0.0)
     private val consumerIds = mutableListOf<String>()
 
     /** Latest field values of streamed system data types (keyed by dataTypeId). */
@@ -59,6 +57,7 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         karooSystem = KarooSystemService(applicationContext)
         navigationRepo = NavigationRepo(karooSystem)
         progressRepo = ProgressRepo(karooSystem)
+        climbStreamRepo = ClimbStreamRepo(karooSystem)
         settingsRepo = SettingsRepo(applicationContext)
         overlay = OverlayController(this)
 
@@ -69,8 +68,8 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
 
         consumerIds += karooSystem.addConsumer<RideState> { state ->
             val active = state is RideState.Recording || state is RideState.Paused
-            // ride ended: forget completed climbs so re-riding the route starts at 0/N
-            if (!active && rideActive.value) engine.reset()
+            // ride ended: drop the frozen active climb so the next ride starts clean
+            if (!active && rideActive.value) builder.reset()
             rideActive.value = active
         }
         consumerIds += karooSystem.addConsumer<UserProfile> { profile ->
@@ -78,16 +77,22 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
                 profile.preferredUnit.distance == UserProfile.PreferredUnit.UnitType.IMPERIAL
         }
 
-        // The DISTANCE_TO_DESTINATION stream (~1 Hz for a whole ride) is only read
-        // by computeState when the overlay is on, a ride is recording and demo mode
-        // isn't short-circuiting it — release the consumer whenever that's not true.
+        // The DISTANCE_TO_DESTINATION and CLIMB streams (~1 Hz for a whole ride) are
+        // only needed while the overlay is on and a ride is recording — release both
+        // consumers whenever that's not true.
         scope.launch {
             combine(settingsRepo.settings, rideActive) { settings, riding ->
-                settings.overlayEnabled && riding && !settings.demoMode
+                settings.overlayEnabled && riding
             }
                 .distinctUntilChanged()
                 .collect { needed ->
-                    if (needed) progressRepo.start() else progressRepo.stop()
+                    if (needed) {
+                        progressRepo.start()
+                        climbStreamRepo.start()
+                    } else {
+                        progressRepo.stop()
+                        climbStreamRepo.stop()
+                    }
                 }
         }
 
@@ -95,11 +100,11 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
             combine(
                 navigationRepo.route,
                 progressRepo.distanceToDestination,
+                climbStreamRepo.climbInfo,
                 settingsRepo.settings,
                 rideActive,
-                demoProgress,
-            ) { route, dtd, settings, riding, demoAt ->
-                computeState(route, dtd, settings, riding, demoAt)
+            ) { route, dtd, info, settings, riding ->
+                computeState(route, dtd, info, settings, riding)
             }.collect { (state, settings) ->
                 when (state) {
                     is ClimbUiState.Shown ->
@@ -125,48 +130,18 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
                 .distinctUntilChanged()
                 .collect { reconcileSysStreams(it) }
         }
-
-        // Demo mode: loop synthetic progress along the demo route so the overlay
-        // can be inspected on the desk without riding. collectLatest cancels the
-        // ticker whenever demo mode is off, so real rides get no 1 Hz wakeups.
-        scope.launch {
-            settingsRepo.settings
-                .map { it.demoMode }
-                .distinctUntilChanged()
-                .collectLatest { enabled ->
-                    while (enabled) {
-                        // loop the whole demo route so all chip/list/climb states show
-                        val next = demoProgress.value + DEMO_SPEED_MPS
-                        if (next > 4900.0) {
-                            engine.reset() // same routeKey each loop — drop completed climbs
-                            demoProgress.value = 0.0
-                        } else {
-                            demoProgress.value = next
-                        }
-                        delay(1000)
-                    }
-                }
-        }
     }
 
     private fun computeState(
         route: com.hazzus.karooclimber.data.RouteData?,
         dtd: Double?,
+        info: ClimbInfo?,
         settings: Settings,
         riding: Boolean,
-        demoAt: Double,
     ): Pair<ClimbUiState, Settings> {
-        if (!settings.overlayEnabled) return ClimbUiState.Hidden to settings
-
-        // Demo mode short-circuits real data
-        if (settings.demoMode) {
-            val state = engine.update(DemoData.route(), demoAt, settings.triggerDistanceM)
-            return state to settings
-        }
-
-        if (!riding) return ClimbUiState.Hidden to settings
+        if (!settings.overlayEnabled || !riding) return ClimbUiState.Hidden to settings
         val progress = progressAlongRoute(route, dtd)
-        return engine.update(route, progress, settings.triggerDistanceM) to settings
+        return builder.build(route, progress, info, settings.triggerDistanceM) to settings
     }
 
     /** Start/stop OnStreamState consumers to match the configured field set. */
@@ -195,6 +170,7 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         sysConsumers.values.forEach { karooSystem.removeConsumer(it) }
         navigationRepo.stop()
         progressRepo.stop()
+        climbStreamRepo.stop()
         scope.cancel()
         karooSystem.disconnect()
         super.onDestroy()
@@ -202,6 +178,5 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
 
     companion object {
         private const val TAG = "ClimberExtension"
-        private const val DEMO_SPEED_MPS = 15.0
     }
 }

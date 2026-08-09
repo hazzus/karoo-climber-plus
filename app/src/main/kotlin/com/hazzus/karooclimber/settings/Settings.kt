@@ -385,8 +385,6 @@ data class Settings(
     val heightPercent: Int = 40,
     /** Overlay opacity 75..100. */
     val opacityPercent: Int = 95,
-    /** Force-show the overlay with DemoData (on-desk testing). */
-    val demoMode: Boolean = false,
     /** The four data fields shown in the full-screen climb view. */
     val fullFields: List<ClimbField> = listOf(
         ClimbField.DIST_TO_TOP,

@@ -16,7 +16,6 @@ import android.view.MotionEvent
 import android.view.View
 import com.hazzus.karooclimber.R
 import com.hazzus.karooclimber.data.ClimbData
-import com.hazzus.karooclimber.data.ClimbEntry
 import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.data.ElevationProfile
 import com.hazzus.karooclimber.overlay.ViewModeMachine.PanelSize
@@ -284,21 +283,17 @@ class ClimbOverlayView(context: Context) : View(context) {
                 active != null && active.distanceToStart <= 0 ->
                     listOf(currentGrade(s), formatValue(active.distanceToTop))
                 active != null -> listOf(formatValue(active.distanceToStart))
-                else -> listOf(s.completedCount, s.totalCount)
+                else -> listOf(s.climbs.size)
             }
             else -> listOf(
                 // list panel: header counter + NEXT IN + per-row status text;
                 // lengths/grades come from the (compared) climbs list itself
-                s.completedCount,
                 s.climbs,
                 s.upcoming.firstOrNull()?.let { formatValue(it.startDistance - s.progress) },
                 listScrollPx,
-                s.climbs.map { entry ->
-                    when {
-                        entry.done -> "done"
-                        s.progress >= entry.climb.startDistance -> "now"
-                        else -> formatKm(entry.climb.startDistance - s.progress)
-                    }
+                s.climbs.map { climb ->
+                    if (s.progress >= climb.startDistance) "now"
+                    else formatKm(climb.startDistance - s.progress)
                 },
             )
         }
@@ -388,7 +383,6 @@ class ClimbOverlayView(context: Context) : View(context) {
     // Hammerhead glyphs replacing the → / ↗ text arrows (white fill baked in)
     private val distToIcon: Drawable? = context.getDrawable(R.drawable.ic_dist_to)
     private val elevGainIcon: Drawable? = context.getDrawable(R.drawable.ic_elev_gain)
-    private val doneIcon: Drawable? = context.getDrawable(R.drawable.ic_done)
     // mountain glyph tinted to match the white chip text (split-chip idle label)
     private val climbIcon: Drawable? =
         context.getDrawable(R.drawable.ic_climber)?.apply { setTint(Color.WHITE) }
@@ -439,7 +433,7 @@ class ClimbOverlayView(context: Context) : View(context) {
                 grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%",
                 dist = formatValue(active.distanceToTop),
             )
-            active == null -> ChipContent.Single("CLIMBS ${s.completedCount}/${s.totalCount}")
+            active == null -> ChipContent.Single("CLIMBS ${s.climbs.size}")
             else -> ChipContent.Single("IN ${formatValue(active.distanceToStart)}")
         }
     }
@@ -514,14 +508,15 @@ class ClimbOverlayView(context: Context) : View(context) {
         chipTextPaint.textAlign = Paint.Align.LEFT
         when {
             active == null -> {
-                // small climb icon + completed/total, kept clear of the tab edge;
+                // small climb icon + climbs-ahead count, kept clear of the tab edge;
                 // drop the icon past 9 climbs so the wider count still fits
+                val count = s.climbs.size
                 var x = pad
-                if (s.totalCount <= 9) {
+                if (count <= 9) {
                     val iconH = chipTextPaint.textSize * 0.55f
                     x += drawIcon(canvas, climbIcon, x, baseline, iconH) + chipTextPaint.textSize * 0.25f
                 }
-                canvas.drawText("${s.completedCount}/${s.totalCount}", x, baseline, chipTextPaint)
+                canvas.drawText("$count", x, baseline, chipTextPaint)
             }
             active.distanceToStart > 0 -> canvas.drawText("IN", pad, baseline, chipTextPaint)
             else -> {
@@ -926,7 +921,7 @@ class ClimbOverlayView(context: Context) : View(context) {
     ): String = when (field) {
         ClimbField.DIST_TO_TOP -> formatValue(active.distanceToTop)
         ClimbField.ELEV_TO_TOP -> formatElevationValue(active.elevationToTop)
-        ClimbField.CLIMB -> "${active.index + 1}/${s.totalCount}"
+        ClimbField.CLIMB -> "${active.index + 1}/${active.total ?: s.climbs.size}"
         ClimbField.GRADE -> currentGrade(s)?.let { "%.1f".format(it) } ?: "--"
         ClimbField.AVG_GRADE -> "%.1f".format(active.climb.avgGrade)
         ClimbField.LENGTH -> formatValue(active.climb.length)
@@ -1008,7 +1003,7 @@ class ClimbOverlayView(context: Context) : View(context) {
         val baseline = big * 1.05f
         textPaint.textSize = big
         textPaint.textAlign = Paint.Align.LEFT
-        canvas.drawText("CLIMBS ${s.completedCount}/${s.totalCount}", pad, baseline, textPaint)
+        canvas.drawText("CLIMBS ${s.climbs.size}", pad, baseline, textPaint)
         s.upcoming.firstOrNull()?.let { next ->
             textPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText(
@@ -1019,11 +1014,7 @@ class ClimbOverlayView(context: Context) : View(context) {
             )
         }
 
-        val rows = if (scrollable) {
-            s.climbs
-        } else {
-            s.upcoming.take(limit).map { ClimbEntry(it, done = false) }
-        }
+        val rows = if (scrollable) s.climbs else s.upcoming.take(limit)
         if (rows.isEmpty()) {
             subTextPaint.textSize = headerH * 0.45f
             subTextPaint.textAlign = Paint.Align.CENTER
@@ -1039,9 +1030,9 @@ class ClimbOverlayView(context: Context) : View(context) {
         canvas.clipRect(0f, listTop, width.toFloat(), height - pad)
         val rowPad = width * 0.045f
         var y = listTop - if (scrollable) listScrollPx else 0f
-        for (entry in rows) {
+        for (climb in rows) {
             if (y + rowH > listTop && y < height) {
-                drawClimbRow(canvas, s, entry, RectF(rowPad, y, width - rowPad, y + rowH))
+                drawClimbRow(canvas, s, climb, RectF(rowPad, y, width - rowPad, y + rowH))
             }
             y += rowH + gap
         }
@@ -1051,11 +1042,8 @@ class ClimbOverlayView(context: Context) : View(context) {
         lastListAreaHeight = height - pad - listTop
     }
 
-    private fun drawClimbRow(canvas: Canvas, s: ClimbUiState.Shown, entry: ClimbEntry, rect: RectF) {
-        val climb = entry.climb
-        // done climbs may carry pre-reroute distances — never compare them to progress
-        val done = entry.done
-        rowPaint.color = if (done) 0xFF4A4A4A.toInt() else palette.colorFor(climb.avgGrade)
+    private fun drawClimbRow(canvas: Canvas, s: ClimbUiState.Shown, climb: ClimbData, rect: RectF) {
+        rowPaint.color = palette.colorFor(climb.avgGrade)
         canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, rowPaint)
 
         rowTextPaint.textSize = rect.height() * 0.55f
@@ -1063,19 +1051,12 @@ class ClimbOverlayView(context: Context) : View(context) {
         val cy = rect.centerY() - (rowTextPaint.ascent() + rowTextPaint.descent()) / 2f
         val colW = rect.width() / 3f
         // unitless: to-start always in km (0.7), length in km, grade in %
-        if (done) {
-            // bottom-aligned with the row text baseline, like the header icons
-            val iconH = rect.height() * 0.42f
-            val iconW = iconWidth(doneIcon, iconH)
-            drawIcon(canvas, doneIcon, rect.left + colW * 0.5f - iconW / 2f, cy, iconH)
+        val toStart = if (s.progress >= climb.startDistance) {
+            "now"
         } else {
-            val toStart = if (s.progress >= climb.startDistance) {
-                "now"
-            } else {
-                formatKm(climb.startDistance - s.progress)
-            }
-            canvas.drawText(toStart, rect.left + colW * 0.5f, cy, rowTextPaint)
+            formatKm(climb.startDistance - s.progress)
         }
+        canvas.drawText(toStart, rect.left + colW * 0.5f, cy, rowTextPaint)
         canvas.drawText(formatKm(climb.length), rect.left + colW * 1.5f, cy, rowTextPaint)
         canvas.drawText("%.1f".format(climb.avgGrade), rect.left + colW * 2.5f, cy, rowTextPaint)
 
