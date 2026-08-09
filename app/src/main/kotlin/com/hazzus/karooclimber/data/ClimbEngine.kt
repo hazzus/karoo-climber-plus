@@ -24,7 +24,12 @@ class ClimbEngine(
     private var shownKey: String? = null
     private var recentlyHiddenKey: String? = null
 
-    /** Climb currently under the rider; completion is recorded when leaving it past the top. */
+    /**
+     * The climb the rider is on. Kept set while they're temporarily off it — a
+     * missed turn or off-route detour drops progress out of the climb window
+     * without abandoning the climb — so returning to finish still counts. Cleared
+     * only when its top is passed, on a route-key change, or by [reset].
+     */
     private var riding: ClimbData? = null
     private val completed = mutableListOf<ClimbData>()
 
@@ -77,11 +82,17 @@ class ClimbEngine(
 
     private fun recordCompletion(sorted: List<ClimbData>, progress: Double) {
         val onClimb = sorted.firstOrNull { progress >= it.startDistance && progress < it.endDistance }
+        // Complete the climb the rider was on once progress passes its top. `riding`
+        // is sticky (a missed turn or detour drops progress out of the window without
+        // ending the climb), so returning to finish it still counts — completion no
+        // longer depends on catching the exact frame the rider leaves the window.
         val prev = riding
-        if (prev != null && prev != onClimb && progress >= prev.endDistance && prev !in completed) {
-            completed += prev
+        if (prev != null && progress >= prev.endDistance) {
+            if (prev !in completed) completed += prev
+            riding = null
         }
-        riding = onClimb
+        // Advance only when actually on a climb; never clear to null off one.
+        if (onClimb != null) riding = onClimb
     }
 
     private fun selectActive(

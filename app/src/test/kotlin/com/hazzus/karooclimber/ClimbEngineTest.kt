@@ -131,6 +131,29 @@ class ClimbEngineTest {
     }
 
     @Test
+    fun `missed turn off climb then rejoin past top still completes`() {
+        val engine = ClimbEngine()
+        shownAt(engine, 4000.0) // riding climb A near the top
+        // missed a turn: off-route, progress falls back before the climb start
+        shownAt(engine, 1800.0)
+        // the detour rejoins the route already past the climb's top
+        val topped = shownAt(engine, 4700.0)
+        assertEquals(1, topped.completedCount)
+        assertTrue(topped.climbs.first().done)
+        assertEquals(route.climbs[0], topped.climbs.first().climb)
+    }
+
+    @Test
+    fun `off climb during a null frame then finish still completes`() {
+        val engine = ClimbEngine()
+        shownAt(engine, 3500.0) // riding climb A
+        // reroute gap: a frame with no route/progress must not drop the in-progress climb
+        assertEquals(ClimbUiState.Hidden, engine.update(null, null, trigger))
+        val topped = shownAt(engine, 4600.0) // past A's top
+        assertEquals(1, topped.completedCount)
+    }
+
+    @Test
     fun `active when approaching within trigger distance`() {
         val engine = ClimbEngine()
         val active = activeAt(engine, 1600.0)
