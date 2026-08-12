@@ -17,6 +17,7 @@ import android.view.View
 import com.hazzus.karooclimber.R
 import com.hazzus.karooclimber.data.ClimbData
 import com.hazzus.karooclimber.data.ClimbUiState
+import com.hazzus.karooclimber.data.CompletedClimb
 import com.hazzus.karooclimber.data.ElevationProfile
 import com.hazzus.karooclimber.overlay.ViewModeMachine.PanelSize
 import com.hazzus.karooclimber.palette.GradePalette
@@ -283,12 +284,13 @@ class ClimbOverlayView(context: Context) : View(context) {
                 active != null && active.distanceToStart <= 0 ->
                     listOf(currentGrade(s), formatValue(active.distanceToTop))
                 active != null -> listOf(formatValue(active.distanceToStart))
-                else -> listOf(s.climbs.size)
+                else -> listOf(s.completed.size, s.climbs.size)
             }
             else -> listOf(
                 // list panel: header counter + NEXT IN + per-row status text;
                 // lengths/grades come from the (compared) climbs list itself
                 s.climbs,
+                s.completed,
                 s.upcoming.firstOrNull()?.let { formatValue(it.startDistance - s.progress) },
                 listScrollPx,
                 s.climbs.map { climb ->
@@ -386,6 +388,9 @@ class ClimbOverlayView(context: Context) : View(context) {
     // mountain glyph tinted to match the white chip text (split-chip idle label)
     private val climbIcon: Drawable? =
         context.getDrawable(R.drawable.ic_climber)?.apply { setTint(Color.WHITE) }
+    // "done" check for completed climb rows, tinted to the dimmed row text tone
+    private val doneIcon: Drawable? =
+        context.getDrawable(R.drawable.ic_done)?.apply { setTint(COMPLETED_ROW_TEXT_COLOR) }
     private val splitChipPath = Path()
 
     /**
@@ -433,7 +438,8 @@ class ClimbOverlayView(context: Context) : View(context) {
                 grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%",
                 dist = formatValue(active.distanceToTop),
             )
-            active == null -> ChipContent.Single("CLIMBS ${s.climbs.size}")
+            active == null ->
+                ChipContent.Single("CLIMBS ${s.completed.size}/${s.completed.size + s.climbs.size}")
             else -> ChipContent.Single("IN ${formatValue(active.distanceToStart)}")
         }
     }
@@ -508,15 +514,18 @@ class ClimbOverlayView(context: Context) : View(context) {
         chipTextPaint.textAlign = Paint.Align.LEFT
         when {
             active == null -> {
-                // small climb icon + climbs-ahead count, kept clear of the tab edge;
-                // drop the icon past 9 climbs so the wider count still fits
-                val count = s.climbs.size
+                // small climb icon + done/total fraction, kept clear of the tab edge;
+                // drop the icon when icon+text would overflow the tab so the text still fits
+                val label = "${s.completed.size}/${s.completed.size + s.climbs.size}"
+                val iconH = chipTextPaint.textSize * 0.55f
+                val iconGap = chipTextPaint.textSize * 0.25f
+                val textW = chipTextPaint.measureText(label)
+                val withIconW = iconWidth(climbIcon, iconH) + iconGap + textW
                 var x = pad
-                if (count <= 9) {
-                    val iconH = chipTextPaint.textSize * 0.55f
-                    x += drawIcon(canvas, climbIcon, x, baseline, iconH) + chipTextPaint.textSize * 0.25f
+                if (pad + withIconW <= chipW - pad) {
+                    x += drawIcon(canvas, climbIcon, x, baseline, iconH) + iconGap
                 }
-                canvas.drawText("$count", x, baseline, chipTextPaint)
+                canvas.drawText(label, x, baseline, chipTextPaint)
             }
             active.distanceToStart > 0 -> canvas.drawText("IN", pad, baseline, chipTextPaint)
             else -> {
@@ -1003,7 +1012,12 @@ class ClimbOverlayView(context: Context) : View(context) {
         val baseline = big * 1.05f
         textPaint.textSize = big
         textPaint.textAlign = Paint.Align.LEFT
-        canvas.drawText("CLIMBS ${s.climbs.size}", pad, baseline, textPaint)
+        canvas.drawText(
+            "CLIMBS ${s.completed.size}/${s.completed.size + s.climbs.size}",
+            pad,
+            baseline,
+            textPaint,
+        )
         s.upcoming.firstOrNull()?.let { next ->
             textPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText(
@@ -1014,8 +1028,12 @@ class ClimbOverlayView(context: Context) : View(context) {
             )
         }
 
-        val rows = if (scrollable) s.climbs else s.upcoming.take(limit)
-        if (rows.isEmpty()) {
+        // FULL list: completed climbs (dimmed "done" rows) first, then the climbs
+        // ahead. The compact drawer stays upcoming-only.
+        val completedRows = if (scrollable) s.completed else emptyList()
+        val aheadRows = if (scrollable) s.climbs else s.upcoming.take(limit)
+        val rowCount = completedRows.size + aheadRows.size
+        if (rowCount == 0) {
             subTextPaint.textSize = headerH * 0.45f
             subTextPaint.textAlign = Paint.Align.CENTER
             canvas.drawText("NO CLIMBS AHEAD", width / 2f, height / 2f, subTextPaint)
@@ -1030,7 +1048,13 @@ class ClimbOverlayView(context: Context) : View(context) {
         canvas.clipRect(0f, listTop, width.toFloat(), height - pad)
         val rowPad = width * 0.045f
         var y = listTop - if (scrollable) listScrollPx else 0f
-        for (climb in rows) {
+        for (climb in completedRows) {
+            if (y + rowH > listTop && y < height) {
+                drawCompletedRow(canvas, climb, RectF(rowPad, y, width - rowPad, y + rowH))
+            }
+            y += rowH + gap
+        }
+        for (climb in aheadRows) {
             if (y + rowH > listTop && y < height) {
                 drawClimbRow(canvas, s, climb, RectF(rowPad, y, width - rowPad, y + rowH))
             }
@@ -1038,7 +1062,7 @@ class ClimbOverlayView(context: Context) : View(context) {
         }
         canvas.restore()
 
-        lastRowsHeight = rows.size * (rowH + gap) - gap
+        lastRowsHeight = rowCount * (rowH + gap) - gap
         lastListAreaHeight = height - pad - listTop
     }
 
@@ -1059,6 +1083,32 @@ class ClimbOverlayView(context: Context) : View(context) {
         canvas.drawText(toStart, rect.left + colW * 0.5f, cy, rowTextPaint)
         canvas.drawText(formatKm(climb.length), rect.left + colW * 1.5f, cy, rowTextPaint)
         canvas.drawText("%.1f".format(climb.avgGrade), rect.left + colW * 2.5f, cy, rowTextPaint)
+
+        // column splices
+        val inset = rect.height() * 0.2f
+        canvas.drawLine(rect.left + colW, rect.top + inset, rect.left + colW, rect.bottom - inset, splicePaint)
+        canvas.drawLine(rect.left + 2 * colW, rect.top + inset, rect.left + 2 * colW, rect.bottom - inset, splicePaint)
+    }
+
+    /** A finished climb: same layout as [drawClimbRow] but dimmed, with a done glyph. */
+    private fun drawCompletedRow(canvas: Canvas, climb: CompletedClimb, rect: RectF) {
+        rowPaint.color = COMPLETED_ROW_BG_COLOR
+        canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, rowPaint)
+
+        rowTextPaint.textSize = rect.height() * 0.55f
+        rowTextPaint.textAlign = Paint.Align.CENTER
+        val prevColor = rowTextPaint.color
+        rowTextPaint.color = COMPLETED_ROW_TEXT_COLOR
+        val cy = rect.centerY() - (rowTextPaint.ascent() + rowTextPaint.descent()) / 2f
+        val colW = rect.width() / 3f
+        // col 0: done glyph (replaces the "to-start"/"now" column), centered
+        val iconH = rect.height() * 0.5f
+        val iconW = iconWidth(doneIcon, iconH)
+        drawIcon(canvas, doneIcon, rect.left + colW * 0.5f - iconW / 2f, rect.centerY() + iconH / 2f, iconH)
+        // col 1: length (unitless km), col 2: avg grade
+        canvas.drawText(formatKm(climb.length), rect.left + colW * 1.5f, cy, rowTextPaint)
+        canvas.drawText("%.1f".format(climb.avgGrade), rect.left + colW * 2.5f, cy, rowTextPaint)
+        rowTextPaint.color = prevColor
 
         // column splices
         val inset = rect.height() * 0.2f
@@ -1155,6 +1205,10 @@ class ClimbOverlayView(context: Context) : View(context) {
         private const val GRADE_CHUNK_METERS = 100.0
 
         private const val CELL_CORNER = 8f
+
+        /** Dimmed styling for finished-climb rows in the full scrollable list. */
+        private const val COMPLETED_ROW_BG_COLOR = 0xFF2A2A2C.toInt()
+        private const val COMPLETED_ROW_TEXT_COLOR = 0xFF8A8A8E.toInt()
 
         /** Cells in the upcoming-chunks strip (5 x 100 m = 500 m lookahead). */
         private const val CHUNK_STRIP_CELLS = 5

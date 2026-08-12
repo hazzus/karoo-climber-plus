@@ -38,6 +38,8 @@ sealed interface ClimbUiState {
         val profile: ElevationProfile?,
         /** Set while approaching or on a climb. */
         val active: ActiveClimb?,
+        /** Climbs already completed this ride, in completion order. */
+        val completed: List<CompletedClimb> = emptyList(),
     ) : ClimbUiState {
         /** Climbs not yet started, in route order. */
         val upcoming: List<ClimbData>

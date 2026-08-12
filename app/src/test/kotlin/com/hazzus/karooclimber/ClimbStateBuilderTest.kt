@@ -2,6 +2,7 @@ package com.hazzus.karooclimber
 
 import com.hazzus.karooclimber.data.ClimbData
 import com.hazzus.karooclimber.data.ClimbInfo
+import com.hazzus.karooclimber.data.CompletedClimb
 import com.hazzus.karooclimber.data.ClimbStateBuilder
 import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.data.ElevationProfile
@@ -143,6 +144,86 @@ class ClimbStateBuilderTest {
         // On the new route the same stream frame must re-anchor from the new progress.
         val s = shown(builder.build(rerouted, 2500.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger))
         assertEquals(2300.0, s.active!!.climb.startDistance, 1e-9) // 2500 − 200
+    }
+
+    @Test
+    fun `topping out records the ridden distance and real grade`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        // Ride on up to the summit; the last on-climb frame is at the top.
+        builder.build(route, 1600.0, ClimbInfo(0.0, 0.0, 600.0, 60.0, 60.0, 1, 2), trigger)
+        val s = shown(builder.build(route, 1700.0, null, trigger)) // stream null, route present
+        assertEquals(1, s.completed.size)
+        assertEquals(600.0, s.completed[0].length, 1e-9) // ridden from bottom at the summit
+        assertEquals(10.0, s.completed[0].avgGrade, 1e-9) // 60 m gained over 600 m
+        assertEquals(1, s.completed[0].climbNumber)
+        assertEquals(listOf(600.0), builder.completedClimbs.map { it.length })
+    }
+
+    @Test
+    fun `bailing out mid-climb records only the ridden portion at its real grade`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        // Rider gets 300 m up, gaining a steep 45 m, then leaves the climb (stream null).
+        builder.build(route, 1300.0, ClimbInfo(300.0, 15.0, 300.0, 45.0, 60.0, 1, 2), trigger)
+        val s = shown(builder.build(route, 1350.0, null, trigger))
+        assertEquals(1, s.completed.size)
+        assertEquals(300.0, s.completed[0].length, 1e-9) // only what was ridden, not the 600 m span
+        assertEquals(15.0, s.completed[0].avgGrade, 1e-9) // real grade over the ridden part, not planned 10
+    }
+
+    @Test
+    fun `climb-number advance records the previous climb's ridden distance`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        builder.build(route, 1600.0, ClimbInfo(0.0, 0.0, 600.0, 60.0, 60.0, 1, 2), trigger) // top of climb 1
+        // Straight onto climb 2 (no null frame between).
+        val s = shown(builder.build(route, 3100.0, ClimbInfo(700.0, 70.0, 100.0, 10.0, 80.0, 2, 2), trigger))
+        assertEquals(1, s.completed.size)
+        assertEquals(1, s.completed[0].climbNumber)
+        assertEquals(600.0, s.completed[0].length, 1e-9)
+    }
+
+    @Test
+    fun `re-detecting the same climb does not record it twice`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        builder.build(route, 1700.0, null, trigger) // topped out -> recorded once
+        // GPS flap re-detects the SAME climb (same number), then it ends again.
+        builder.build(route, 1300.0, ClimbInfo(300.0, 30.0, 300.0, 30.0, 60.0, 1, 2), trigger)
+        val s = shown(builder.build(route, 1700.0, null, trigger))
+        assertEquals(1, s.completed.size)
+    }
+
+    @Test
+    fun `reset clears completed climbs`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        builder.build(route, 1700.0, null, trigger)
+        assertEquals(1, builder.completedClimbs.size)
+        builder.reset()
+        assertTrue(builder.completedClimbs.isEmpty())
+    }
+
+    @Test
+    fun `restore seeds completed and prevents re-recording that climb`() {
+        val builder = ClimbStateBuilder()
+        builder.restore(listOf(CompletedClimb(length = 600.0, avgGrade = 10.0, climbNumber = 1)))
+        val s0 = shown(builder.build(route, 200.0, null, trigger))
+        assertEquals(1, s0.completed.size)
+        // Climb 1 is re-detected then ends: must NOT record a second time.
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        val s = shown(builder.build(route, 1700.0, null, trigger))
+        assertEquals(1, s.completed.size)
+    }
+
+    @Test
+    fun `route change does not record a completion`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        val rerouted = route.copy(routeKey = "route:other:false")
+        val s = shown(builder.build(rerouted, 2500.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger))
+        assertTrue(s.completed.isEmpty())
     }
 
     @Test

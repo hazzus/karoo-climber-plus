@@ -7,6 +7,7 @@ import com.hazzus.karooclimber.data.ClimbStreamRepo
 import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.data.NavigationRepo
 import com.hazzus.karooclimber.data.ProgressRepo
+import com.hazzus.karooclimber.data.RideHistoryRepo
 import com.hazzus.karooclimber.data.progressAlongRoute
 import com.hazzus.karooclimber.overlay.OverlayController
 import com.hazzus.karooclimber.settings.Settings
@@ -41,8 +42,12 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
     private lateinit var progressRepo: ProgressRepo
     private lateinit var climbStreamRepo: ClimbStreamRepo
     private lateinit var settingsRepo: SettingsRepo
+    private lateinit var rideHistoryRepo: RideHistoryRepo
     private lateinit var overlay: OverlayController
     private val builder = ClimbStateBuilder()
+
+    /** Size last mirrored to DataStore, to skip redundant writes. */
+    private var lastPersistedCount = 0
 
     private val rideActive = MutableStateFlow(false)
     private val imperial = MutableStateFlow(false)
@@ -59,7 +64,16 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         progressRepo = ProgressRepo(karooSystem)
         climbStreamRepo = ClimbStreamRepo(karooSystem)
         settingsRepo = SettingsRepo(applicationContext)
+        rideHistoryRepo = RideHistoryRepo(applicationContext)
         overlay = OverlayController(this)
+
+        // Seed the builder from persistence so a mid-ride service restart keeps
+        // climbs already completed this ride.
+        scope.launch {
+            val restored = rideHistoryRepo.load()
+            builder.restore(restored)
+            lastPersistedCount = restored.size
+        }
 
         karooSystem.connect { connected ->
             Log.i(TAG, "Karoo system connected=$connected")
@@ -69,7 +83,11 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         consumerIds += karooSystem.addConsumer<RideState> { state ->
             val active = state is RideState.Recording || state is RideState.Paused
             // ride ended: drop the frozen active climb so the next ride starts clean
-            if (!active && rideActive.value) builder.reset()
+            if (!active && rideActive.value) {
+                builder.reset()
+                lastPersistedCount = 0
+                scope.launch { rideHistoryRepo.clear() }
+            }
             rideActive.value = active
         }
         consumerIds += karooSystem.addConsumer<UserProfile> { profile ->
@@ -110,6 +128,12 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
                     is ClimbUiState.Shown ->
                         overlay.show(state, settings, imperial.value, sysValues.value)
                     is ClimbUiState.Hidden -> overlay.hide()
+                }
+                // Mirror any newly completed climbs to DataStore.
+                val completed = builder.completedClimbs
+                if (completed.size != lastPersistedCount) {
+                    rideHistoryRepo.save(completed)
+                    lastPersistedCount = completed.size
                 }
             }
         }

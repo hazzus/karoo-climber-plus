@@ -25,16 +25,86 @@ class ClimbStateBuilder {
     /** True when [frozen] was built route-less (relative coords), so onClimb re-snapshots. */
     private var frozenRouteless = false
 
+    /**
+     * Furthest point reached up the current climb (ridden distance from its bottom, m)
+     * and the elevation gained there. Tracked per active climb so a completion records
+     * what was ACTUALLY ridden and its real grade — not the full planned span that was
+     * frozen at detection (which over-reports a climb the rider bailed out of).
+     */
+    private var climbRidden = 0.0
+    private var climbElevGained = 0.0
+
+    /** Climbs finished this ride, in completion order. */
+    private val completed = mutableListOf<CompletedClimb>()
+
+    /** Dedupe by climb number (preferred) and by span (fallback when number is null). */
+    private val recordedNumbers = mutableSetOf<Int>()
+    private val recordedSpans = mutableSetOf<Pair<Double, Double>>()
+
+    /** Snapshot of completed climbs for the extension to persist. */
+    val completedClimbs: List<CompletedClimb> get() = completed.toList()
+
     /** Drop the frozen active climb (e.g. a new ride). Route changes reset it inline. */
     fun reset() {
         routeKey = null
         clearFrozen()
+        completed.clear()
+        recordedNumbers.clear()
+        recordedSpans.clear()
+    }
+
+    /**
+     * Seed completed climbs from persistence on service restart, so an already-recorded
+     * climb isn't recorded again. Dedupe sets are rebuilt by climb number where present.
+     *
+     * NOTE: a restored [CompletedClimb] carries no route span (the model has no
+     * start/end), so restored entries with a null climbNumber cannot be span-deduped —
+     * acceptable, since a null-number climb re-detected after a restart is a rare edge.
+     */
+    fun restore(list: List<CompletedClimb>) {
+        completed.clear()
+        completed.addAll(list)
+        recordedNumbers.clear()
+        recordedSpans.clear()
+        for (c in list) c.climbNumber?.let { recordedNumbers.add(it) }
+    }
+
+    /**
+     * Record the just-finished [frozen] climb (guarded: routed, active climb only).
+     * Uses the tracked ridden distance + elevation gained ([climbRidden]/[climbElevGained])
+     * so the entry reflects what was actually ridden and its real grade — falling back to
+     * the frozen span only if no on-climb frame was ever measured. Dedupes on climb number
+     * when known, else on the frozen span, so a brief GPS flap that re-detects the SAME
+     * climb doesn't record it twice.
+     */
+    private fun recordFrozen() {
+        val climb = frozen ?: return
+        if (frozenRouteless) return
+        val number = frozenNumber
+        val span = climb.startDistance to climb.endDistance
+        if (number != null) {
+            if (!recordedNumbers.add(number)) return
+        } else {
+            if (!recordedSpans.add(span)) return
+        }
+        val ridden = if (climbRidden > 0.0) climbRidden else climb.length
+        val elevGained = if (climbRidden > 0.0) climbElevGained else climb.totalElevation
+        completed.add(
+            CompletedClimb(
+                length = ridden,
+                avgGrade = if (ridden > 0.0) elevGained / ridden * 100.0 else climb.avgGrade,
+                totalElevation = elevGained,
+                climbNumber = number,
+            ),
+        )
     }
 
     private fun clearFrozen() {
         frozen = null
         frozenNumber = null
         frozenRouteless = false
+        climbRidden = 0.0
+        climbElevGained = 0.0
     }
 
     fun build(
@@ -55,6 +125,7 @@ class ClimbStateBuilder {
                     progress = riderPos,
                     profile = null,
                     active = active,
+                    completed = completed.toList(),
                 )
             } ?: ClimbUiState.Hidden
         }
@@ -75,10 +146,13 @@ class ClimbStateBuilder {
                     progress = riderPos,
                     profile = route.profile,
                     active = active,
+                    completed = completed.toList(),
                 )
             }
             // Couldn't anchor yet (no DTD frame) -> fall through and wait.
         } else {
+            // Stream ended while routed: the active climb just topped out -> record it.
+            recordFrozen()
             clearFrozen()
         }
 
@@ -91,6 +165,7 @@ class ClimbStateBuilder {
             progress = progress,
             profile = route.profile,
             active = approaching(route, ahead, progress, triggerDistance),
+            completed = completed.toList(),
         )
     }
 
@@ -109,6 +184,15 @@ class ClimbStateBuilder {
         val number = info.climbNumber
 
         if (frozen == null || frozenRouteless || (number != null && number != frozenNumber)) {
+            // Stream jumped straight to the next climb (no null frame): the previous
+            // frozen climb topped out -> record it before overwriting the snapshot.
+            // recordFrozen() no-ops on the first climb (frozen null) and the routeless
+            // re-anchor (frozenRouteless), so only a genuine routed advance is recorded.
+            recordFrozen()
+            // starting a new climb: reset the ridden tracker (clearFrozen isn't called on
+            // a straight number advance, only on a null-frame end)
+            climbRidden = 0.0
+            climbElevGained = 0.0
             val pos = progress ?: return null // need DTD once to anchor the snapshot
             val length = (distFromBottom ?: 0.0) + (distToTop ?: 0.0)
             if (length <= 0.0) return null
@@ -142,6 +226,17 @@ class ClimbStateBuilder {
             elevationToTop = info.elevationToTop
                 ?: elevationToTop(route.profile, climb, riderPos),
         )
+
+        // Track the furthest point ridden up this climb (and the elevation gained there),
+        // preferring the stream's own from-bottom measures, so a completion records the
+        // actual ridden distance + real grade rather than the planned span.
+        val ridden = (info.distanceFromBottom ?: (riderPos - climb.startDistance)).coerceAtLeast(0.0)
+        if (ridden >= climbRidden) {
+            climbRidden = ridden
+            climbElevGained =
+                (info.elevationFromBottom ?: (climb.totalElevation - active.elevationToTop))
+                    .coerceAtLeast(0.0)
+        }
         return active to riderPos
     }
 
