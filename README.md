@@ -165,6 +165,18 @@ repo secrets `KEYSTORE_BASE64` (`base64 -i` of the `.jks`),
 - Route, climbs and the elevation profile come from karoo-ext
   `OnNavigationState` — the same climb data Karoo's own Climber uses.
 - Rider progress is derived from the `DISTANCE_TO_DESTINATION` stream.
+- **Reroutes.** When you go off-route, Karoo re-bases the climbs list to
+  distances measured *from where the reroute was computed* (signalled by
+  `rejoinDistance` being set) rather than absolute positions along the route, and
+  it keeps the *original* route's elevation profile — which no longer lines up
+  with the re-based climbs, and there is no elevation polyline for the reroute
+  path. Climber+ detects the reroute and switches to a relative frame, drawing
+  each climb as a constant-grade wedge (from its grade/length, since no matching
+  silhouette is available). That list stays static between Karoo's recomputes, so
+  Climber+ advances the distance-to-climb itself as you move — the DTD-derived
+  progress still tracks your movement — re-anchoring only when Karoo re-bases the
+  list. Absolute positioning and the real profile silhouette resume automatically
+  on rejoin.
 - The overlay is a standard Android `TYPE_APPLICATION_OVERLAY` window (the
   same approach as [Ki2](https://github.com/valterc/ki2)) hosted by the
   extension's foreground service.
@@ -173,8 +185,9 @@ repo secrets `KEYSTORE_BASE64` (`base64 -i` of the `.jks`),
 
 ### Limitations
 
-- Progress is derived from distance-to-destination; while off-route it can be
-  slightly off until you rejoin.
+- While off-route (rerouting), climbs are shown at rider-relative distances and
+  drawn as wedges — the reroute path carries no elevation data — with the full
+  profile silhouette returning once you rejoin the route.
 - If Karoo OS doesn't provide an elevation polyline for a route, the profile
   falls back to a constant-grade rendering from the climb summary.
 - System data fields show `--` until their stream produces values (in-ride).

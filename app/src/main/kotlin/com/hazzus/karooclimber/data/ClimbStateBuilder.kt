@@ -1,5 +1,7 @@
 package com.hazzus.karooclimber.data
 
+import kotlin.math.roundToInt
+
 /**
  * Builds the overlay [ClimbUiState] from the fresh navigation route (upcoming climbs)
  * and Karoo's native CLIMB stream ([ClimbInfo], the live active climb).
@@ -15,6 +17,16 @@ package com.hazzus.karooclimber.data
  * With no route loaded, a live CLIMB stream is still surfaced as a "predicted" climb
  * (see [routelessClimb]): coordinates relative to the climb, no upcoming list, and a
  * null profile so the view draws a constant-grade wedge.
+ *
+ * During a reroute ([RouteData.rerouting]) the whole state switches to a rider-relative
+ * frame and every climb is drawn as a wedge (no absolute profile to slice). Karoo's reroute
+ * climbs list is anchored to the point where the reroute was computed — not the moving rider
+ * — and stays static until Karoo recomputes, so we progress the distance ourselves: [progress]
+ * still advances 1:1 with the rider (routeDistance is fixed, DTD falls as you move), so
+ * `moved = progress − progressAtAnchor`, re-anchored only when Karoo re-bases the list. If
+ * the rider is actually on a climb during the reroute the live CLIMB stream drives it via the
+ * route-less path (stream is frame-independent), so the climb is never skipped. The normal
+ * absolute-frame logic resumes on rejoin.
  */
 class ClimbStateBuilder {
 
@@ -34,6 +46,15 @@ class ClimbStateBuilder {
     private var climbRidden = 0.0
     private var climbElevGained = 0.0
 
+    /**
+     * Reroute progression: the [progress] captured when the current reroute climbs list was
+     * first seen (its anchor), and that list's start distances — so a Karoo recompute (all
+     * starts re-based) re-anchors, while a prefix-drop (rider passed the nearest climb) does
+     * not. Null anchor = no reroute in progress.
+     */
+    private var rerouteAnchorProgress: Double? = null
+    private var rerouteStarts: List<Int> = emptyList()
+
     /** Climbs finished this ride, in completion order. */
     private val completed = mutableListOf<CompletedClimb>()
 
@@ -48,6 +69,7 @@ class ClimbStateBuilder {
     fun reset() {
         routeKey = null
         clearFrozen()
+        clearRerouteAnchor()
         completed.clear()
         recordedNumbers.clear()
         recordedSpans.clear()
@@ -107,6 +129,28 @@ class ClimbStateBuilder {
         climbElevGained = 0.0
     }
 
+    private fun clearRerouteAnchor() {
+        rerouteAnchorProgress = null
+        rerouteStarts = emptyList()
+    }
+
+    /**
+     * Distance the rider has moved since the current reroute anchor. Karoo's reroute climbs
+     * list is anchored where the reroute was computed and stays static as the rider moves;
+     * [progress] still advances 1:1 with the rider, so `moved = progress − anchorProgress`.
+     * The anchor is (re)set whenever the list is freshly re-based — any start not seen in the
+     * previous frame — but a prefix-drop (rider passed the nearest climb, the rest unchanged)
+     * keeps the anchor so the progression stays continuous. Returns 0 without a DTD [progress].
+     */
+    private fun rerouteMoved(sorted: List<ClimbData>, progress: Double?): Double {
+        val starts = sorted.map { it.startDistance.roundToInt() }
+        val reBased = starts.any { it !in rerouteStarts }
+        if (rerouteAnchorProgress == null || reBased) rerouteAnchorProgress = progress
+        rerouteStarts = starts
+        val anchor = rerouteAnchorProgress
+        return if (progress != null && anchor != null) (progress - anchor).coerceAtLeast(0.0) else 0.0
+    }
+
     fun build(
         route: RouteData?,
         progress: Double?,
@@ -133,9 +177,49 @@ class ClimbStateBuilder {
         if (route.routeKey != routeKey) {
             routeKey = route.routeKey
             clearFrozen()
+            clearRerouteAnchor()
         }
 
         val sorted = route.climbs.sortedBy { it.startDistance }
+
+        // Off-route (a reroute is active): the climbs list is re-based to distances AHEAD of
+        // the anchor point where Karoo computed the reroute (rejoinDistance is set), not
+        // absolute route positions, and the fixed elevation profile no longer lines up. The
+        // list stays static as the rider moves, so we progress it ourselves ([rerouteMoved]):
+        // each climb sits at startDistance − moved, and every silhouette is a constant-grade
+        // wedge (null profile). Absolute-frame logic resumes automatically on rejoin.
+        if (route.rerouting) {
+            val moved = rerouteMoved(sorted, progress)
+            // On a climb during the reroute: the CLIMB stream is frame-independent, so surface
+            // the active climb straight from it (wedge, relative coords) — the route-less path —
+            // rather than the approach-only list below, which skips the climb the moment the
+            // rider passes its start. The upcoming list is hidden while climbing (its anchor-
+            // frame distances can't be placed against the stream's aggregate climb).
+            if (info != null) {
+                routelessClimb(info)?.let { (active, riderPos) ->
+                    return ClimbUiState.Shown(
+                        climbs = emptyList(),
+                        progress = riderPos,
+                        profile = null,
+                        active = active,
+                        completed = completed.toList(),
+                    )
+                }
+                // stream present but not yet anchorable -> fall through to the list
+            } else {
+                clearFrozen() // climb topped out / none active -> drop the route-less snapshot
+            }
+            val ahead = sorted.filter { moved < it.endDistance }
+            if (ahead.isEmpty()) return ClimbUiState.Hidden
+            return ClimbUiState.Shown(
+                climbs = ahead,
+                progress = moved,
+                profile = null,
+                active = approaching(route.copy(profile = null), ahead, moved, triggerDistance),
+                completed = completed.toList(),
+            )
+        }
+        clearRerouteAnchor() // on route or rejoined: forget the reroute anchor
 
         // On a climb: the stream drives everything once anchored.
         if (info != null) {

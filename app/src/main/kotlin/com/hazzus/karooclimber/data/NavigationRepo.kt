@@ -42,6 +42,8 @@ class NavigationRepo(private val karooSystem: KarooSystemService) {
             profile = ElevationProfile.fromPolyline(routeElevationPolyline),
             climbs = climbs.map { it.toClimbData() },
             routeKey = "route:$name:$reversed",
+            // rejoinDistance set => off-route reroute: climbs are rider-relative, not absolute.
+            rerouting = rejoinDistance != null,
         )
         is OnNavigationState.NavigationState.NavigatingToDestination -> RouteData(
             routeDistance = null,

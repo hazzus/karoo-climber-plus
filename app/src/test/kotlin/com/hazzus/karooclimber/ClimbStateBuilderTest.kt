@@ -147,6 +147,108 @@ class ClimbStateBuilderTest {
     }
 
     @Test
+    fun `rerouting shows climbs at rider-relative distances with a wedge`() {
+        // Off-route: climbs are distances AHEAD of the rider, and the profile no longer aligns.
+        val relClimbs = listOf(
+            ClimbData(startDistance = 300.0, length = 600.0, avgGrade = 10.0, totalElevation = 60.0),
+            ClimbData(startDistance = 2000.0, length = 800.0, avgGrade = 10.0, totalElevation = 80.0),
+        )
+        val rr = route.copy(rerouting = true, climbs = relClimbs)
+        // First reroute frame: progress (42000) just seeds the anchor, so moved = 0.
+        val s = shown(ClimbStateBuilder().build(rr, 42_000.0, null, trigger))
+        assertEquals(0.0, s.progress, 1e-9) // moved since anchor
+        assertNull(s.profile) // wedge silhouettes, not a wrong profile slice
+        assertEquals(2, s.upcoming.size) // both climbs are ahead
+        val active = s.active!!
+        assertEquals(300.0, active.distanceToStart, 1e-9) // straight from startDistance
+        assertEquals(900.0, active.distanceToTop, 1e-9) // 300 + 600
+        assertEquals(60.0, active.elevationToTop, 1e-9) // full climb ahead, from the wedge
+    }
+
+    @Test
+    fun `rerouting with the next climb beyond the trigger shows the list without active`() {
+        val rr = route.copy(rerouting = true, climbs = listOf(ClimbData(3000.0, 600.0, 10.0, 60.0)))
+        val s = shown(ClimbStateBuilder().build(rr, 0.0, null, trigger))
+        assertNull(s.active) // 3000 m ahead > 500 m trigger
+        assertEquals(1, s.upcoming.size)
+        assertNull(s.profile)
+    }
+
+    @Test
+    fun `rejoining resumes the absolute frame and the real profile`() {
+        val builder = ClimbStateBuilder()
+        val rr = route.copy(rerouting = true, climbs = listOf(ClimbData(300.0, 600.0, 10.0, 60.0)))
+        val off = shown(builder.build(rr, 999.0, null, trigger))
+        assertNull(off.profile)
+        assertEquals(300.0, off.active!!.distanceToStart, 1e-9) // rider-relative
+        // Rejoin (rerouting=false, absolute climbs): usual logic + real profile.
+        val on = shown(builder.build(route, 700.0, null, trigger))
+        assertNotNull(on.profile)
+        assertEquals(300.0, on.active!!.distanceToStart, 1e-9) // 1000 − 700, absolute
+    }
+
+    @Test
+    fun `rerouting surfaces the on-climb state from the stream instead of skipping it`() {
+        val builder = ClimbStateBuilder()
+        val rr = route.copy(rerouting = true, climbs = listOf(ClimbData(0.0, 600.0, 10.0, 60.0)))
+        // Rider is on a climb during the reroute; the CLIMB stream is live (native shows it).
+        val info = ClimbInfo(
+            distanceToTop = 400.0,
+            elevationToTop = 40.0,
+            distanceFromBottom = 200.0,
+            elevationFromBottom = 20.0,
+            climbElevation = 60.0,
+            climbNumber = 3,
+            totalClimbs = 5,
+        )
+        val s = shown(builder.build(rr, 12_345.0, info, trigger))
+        val active = s.active!!
+        assertEquals(0.0, active.distanceToStart, 1e-9) // on the climb, not merely approaching
+        assertEquals(400.0, active.distanceToTop, 1e-9) // straight from the stream
+        assertEquals(40.0, active.elevationToTop, 1e-9)
+        assertNull(s.profile) // wedge
+        assertEquals(200.0, s.progress, 1e-9) // distanceFromBottom, relative to the climb
+    }
+
+    @Test
+    fun `rerouting decreases distance to the climb as the rider moves`() {
+        val builder = ClimbStateBuilder()
+        val rr = route.copy(rerouting = true, climbs = listOf(ClimbData(1000.0, 600.0, 10.0, 60.0)))
+        val a = shown(builder.build(rr, 50_000.0, null, trigger)) // anchor, moved = 0
+        assertEquals(0.0, a.progress, 1e-9)
+        assertEquals(1000.0, a.climbs.first().startDistance - a.progress, 1e-9) // 1000 m ahead
+        // Rider moves 300 m; Karoo re-emits the SAME (still anchor-relative) list.
+        val b = shown(builder.build(rr, 50_300.0, null, trigger))
+        assertEquals(300.0, b.progress, 1e-9) // moved since the anchor
+        assertEquals(700.0, b.climbs.first().startDistance - b.progress, 1e-9) // now 700 m ahead
+    }
+
+    @Test
+    fun `a fresh reroute computation re-anchors the progression`() {
+        val builder = ClimbStateBuilder()
+        val rr1 = route.copy(rerouting = true, climbs = listOf(ClimbData(1000.0, 600.0, 10.0, 60.0)))
+        builder.build(rr1, 50_000.0, null, trigger)
+        builder.build(rr1, 50_400.0, null, trigger) // moved 400
+        // Karoo recomputes: brand-new re-based starts -> moved resets to 0.
+        val rr2 = route.copy(rerouting = true, climbs = listOf(ClimbData(800.0, 600.0, 10.0, 60.0)))
+        val c = shown(builder.build(rr2, 50_400.0, null, trigger))
+        assertEquals(0.0, c.progress, 1e-9)
+        assertEquals(800.0, c.climbs.first().startDistance - c.progress, 1e-9)
+    }
+
+    @Test
+    fun `passing a climb during reroute does not re-anchor the progression`() {
+        val builder = ClimbStateBuilder()
+        val two = listOf(ClimbData(400.0, 300.0, 10.0, 30.0), ClimbData(2000.0, 600.0, 10.0, 60.0))
+        builder.build(route.copy(rerouting = true, climbs = two), 50_000.0, null, trigger)
+        // Rider moved 500 m; nearest climb passed, Karoo drops it, far one unchanged.
+        val dropped = route.copy(rerouting = true, climbs = listOf(ClimbData(2000.0, 600.0, 10.0, 60.0)))
+        val s = shown(builder.build(dropped, 50_500.0, null, trigger))
+        assertEquals(500.0, s.progress, 1e-9) // same anchor kept, progression continuous
+        assertEquals(1500.0, s.climbs.first().startDistance - s.progress, 1e-9) // 2000 − 500
+    }
+
+    @Test
     fun `topping out records the ridden distance and real grade`() {
         val builder = ClimbStateBuilder()
         builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)

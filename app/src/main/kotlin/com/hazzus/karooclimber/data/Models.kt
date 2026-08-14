@@ -18,6 +18,12 @@ data class RouteData(
     val climbs: List<ClimbData>,
     /** Identity key to detect route changes. */
     val routeKey: String,
+    /**
+     * True while a reroute is active (Karoo's `rejoinDistance` is set). During a reroute
+     * the climbs list is re-based to distances AHEAD of the rider (not absolute route
+     * positions) and the fixed elevation profile no longer lines up — see [ClimbStateBuilder].
+     */
+    val rerouting: Boolean = false,
 ) {
     /** Best-known total distance for progress computation. */
     val totalDistance: Double? get() = routeDistance ?: profile?.totalDistance
