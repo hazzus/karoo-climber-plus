@@ -35,9 +35,10 @@ despite what upstream docs say.
 ## Device workflow (no emulator path)
 
 karoo-ext binds to Karoo OS services, so integration only works on a real device —
-that's why all math is unit-tested off-device. On-desk verification uses **Demo mode**
-(settings toggle) which feeds a canned 5 km two-climb route (`debug/DemoData.kt`) with
-synthetic progress looping at 15 m/s (`ClimberExtension`).
+that's why all math is unit-tested off-device. There is no on-desk simulation path:
+the old **Demo mode** short-circuit (settings toggle + canned `debug/DemoData.kt` route)
+was removed in the karoo-ext climb-detection rework, so full pipeline verification now
+needs a real Karoo (or the deferred device GPS mock — see the memory note).
 
 - Crash logs: `adb logcat -d | grep -A 30 "FATAL EXCEPTION"`
 - Extension binding check: logcat lines `HHApp: Extensions: ... connected` and
@@ -51,7 +52,7 @@ Data flows one way: karoo-ext events → repos → pure state builder → overla
 
 - **`ClimberExtension`** (KarooExtension service, entry point): owns the
   `KarooSystemService` connection, wires everything, combines flows
-  (route, distance-to-destination, settings, ride state, demo progress) at ~1 Hz and
+  (route, distance-to-destination, climb stream, settings, ride state) at ~1 Hz and
   drives `OverlayController.show/hide`. Also reconciles `OnStreamState` consumers for
   whichever system data fields are configured (`reconcileSysStreams`).
 - **`data/`** — `NavigationRepo` normalizes `OnNavigationState` (route or destination
@@ -121,6 +122,6 @@ Data flows one way: karoo-ext events → repos → pure state builder → overla
   the relayout hook is attached only after the window exists (past crash).
 - WindowManager calls are main-thread; the extension scope runs on
   `Dispatchers.Main.immediate`.
-- `ClimbStateBuilderTest` uses its own route fixture on purpose — keep it decoupled from
-  `DemoData`, which changes freely for demo UX.
+- `ClimbStateBuilderTest` defines its own route fixtures — it is the primary
+  verification surface for the state machine now that Demo mode is gone.
 - Visual/native-design references live in the README screenshot table (`docs/img/`).
