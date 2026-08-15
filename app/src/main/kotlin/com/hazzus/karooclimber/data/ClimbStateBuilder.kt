@@ -2,6 +2,12 @@ package com.hazzus.karooclimber.data
 
 import kotlin.math.roundToInt
 
+/** Minimum spacing between retained live-trace samples, meters (downsampling). */
+private const val TRACE_STEP_M = 10.0
+
+/** Bucket (m) for numberless-climb completion dedup, absorbing per-frame position noise. */
+private const val SPAN_DEDUP_BUCKET_M = 10.0
+
 /**
  * Builds the overlay [ClimbUiState] from the fresh navigation route (upcoming climbs)
  * and Karoo's native CLIMB stream ([ClimbInfo], the live active climb).
@@ -38,6 +44,15 @@ class ClimbStateBuilder {
     private var frozenRouteless = false
 
     /**
+     * Absolute route position of a route-less/reroute climb's bottom (progress −
+     * distanceFromBottom at detection). The rendered span starts at 0, so this recovers a
+     * distinct completion-dedup key from the route start — the same absolute (start, end)
+     * routed climbs already dedup on. Null for routed climbs ([ClimbData.startDistance] is
+     * already absolute there) and when no progress was available (pure route-less).
+     */
+    private var frozenAbsStart: Double? = null
+
+    /**
      * Furthest point reached up the current climb (ridden distance from its bottom, m)
      * and the elevation gained there. Tracked per active climb so a completion records
      * what was ACTUALLY ridden and its real grade — not the full planned span that was
@@ -45,6 +60,16 @@ class ClimbStateBuilder {
      */
     private var climbRidden = 0.0
     private var climbElevGained = 0.0
+
+    /**
+     * Live trace of the ridden portion of the current wedge climb (no route elevation
+     * profile): real (distance, elevation-from-bottom) samples in the active climb's
+     * coordinate frame, downsampled to one per [TRACE_STEP_M]. [tracedProfile] is the
+     * composed silhouette (bottom anchor + samples + line to the known top), recomputed
+     * only on an actual append so its object identity is stable between frames.
+     */
+    private val tracedPoints = mutableListOf<ElevationProfile.Point>()
+    private var tracedProfile: ElevationProfile? = null
 
     /**
      * Reroute progression: the [progress] captured when the current reroute climbs list was
@@ -92,22 +117,22 @@ class ClimbStateBuilder {
     }
 
     /**
-     * Record the just-finished [frozen] climb (guarded: routed, active climb only).
+     * Record the just-finished [frozen] climb — routed, route-less, or ridden during a reroute.
      * Uses the tracked ridden distance + elevation gained ([climbRidden]/[climbElevGained])
      * so the entry reflects what was actually ridden and its real grade — falling back to
      * the frozen span only if no on-climb frame was ever measured. Dedupes on climb number
-     * when known, else on the frozen span, so a brief GPS flap that re-detects the SAME
-     * climb doesn't record it twice.
+     * when known, else on the absolute span: route-less/reroute climbs take theirs from
+     * [frozenAbsStart] (their rendered [ClimbData.startDistance] is a relative 0), bucketed
+     * so a brief GPS flap that re-detects the SAME climb doesn't record it twice.
      */
     private fun recordFrozen() {
         val climb = frozen ?: return
-        if (frozenRouteless) return
         val number = frozenNumber
-        val span = climb.startDistance to climb.endDistance
         if (number != null) {
             if (!recordedNumbers.add(number)) return
         } else {
-            if (!recordedSpans.add(span)) return
+            val start = frozenAbsStart ?: climb.startDistance
+            if (!recordedSpans.add(spanKeyOf(start, climb.length))) return
         }
         val ridden = if (climbRidden > 0.0) climbRidden else climb.length
         val elevGained = if (climbRidden > 0.0) climbElevGained else climb.totalElevation
@@ -121,12 +146,28 @@ class ClimbStateBuilder {
         )
     }
 
+    /**
+     * Dedup key for a numberless climb: (start, end) bucketed to [SPAN_DEDUP_BUCKET_M] so
+     * per-frame noise in progress − distanceFromBottom can't defeat dedup of the same climb.
+     */
+    private fun spanKeyOf(start: Double, length: Double): Pair<Double, Double> {
+        fun bucket(v: Double) = (v / SPAN_DEDUP_BUCKET_M).roundToInt() * SPAN_DEDUP_BUCKET_M
+        return bucket(start) to bucket(start + length)
+    }
+
     private fun clearFrozen() {
         frozen = null
         frozenNumber = null
         frozenRouteless = false
+        frozenAbsStart = null
         climbRidden = 0.0
         climbElevGained = 0.0
+        clearTrace()
+    }
+
+    private fun clearTrace() {
+        tracedPoints.clear()
+        tracedProfile = null
     }
 
     private fun clearRerouteAnchor() {
@@ -160,16 +201,18 @@ class ClimbStateBuilder {
         // No navigation: still surface a predicted climb straight from the CLIMB stream.
         if (route == null) {
             if (info == null) {
+                recordFrozen() // a route-less climb that just topped out is still recorded
                 clearFrozen()
                 return ClimbUiState.Hidden
             }
-            return routelessClimb(info)?.let { (active, riderPos) ->
+            return routelessClimb(info, progress)?.let { (active, riderPos) ->
                 ClimbUiState.Shown(
                     climbs = emptyList(),
                     progress = riderPos,
                     profile = null,
                     active = active,
                     completed = completed.toList(),
+                    tracedProfile = tracedProfile,
                 )
             } ?: ClimbUiState.Hidden
         }
@@ -196,18 +239,21 @@ class ClimbStateBuilder {
             // rider passes its start. The upcoming list is hidden while climbing (its anchor-
             // frame distances can't be placed against the stream's aggregate climb).
             if (info != null) {
-                routelessClimb(info)?.let { (active, riderPos) ->
+                routelessClimb(info, progress)?.let { (active, riderPos) ->
                     return ClimbUiState.Shown(
                         climbs = emptyList(),
                         progress = riderPos,
                         profile = null,
                         active = active,
                         completed = completed.toList(),
+                        tracedProfile = tracedProfile,
                     )
                 }
                 // stream present but not yet anchorable -> fall through to the list
             } else {
-                clearFrozen() // climb topped out / none active -> drop the route-less snapshot
+                // climb topped out / none active -> record it (off-route climbs count) then drop
+                recordFrozen()
+                clearFrozen()
             }
             val ahead = sorted.filter { moved < it.endDistance }
             if (ahead.isEmpty()) return ClimbUiState.Hidden
@@ -231,6 +277,8 @@ class ClimbStateBuilder {
                     profile = route.profile,
                     active = active,
                     completed = completed.toList(),
+                    // null when route.profile != null (we never traced): the real slice suffices
+                    tracedProfile = tracedProfile,
                 )
             }
             // Couldn't anchor yet (no DTD frame) -> fall through and wait.
@@ -270,19 +318,22 @@ class ClimbStateBuilder {
         if (frozen == null || frozenRouteless || (number != null && number != frozenNumber)) {
             // Stream jumped straight to the next climb (no null frame): the previous
             // frozen climb topped out -> record it before overwriting the snapshot.
-            // recordFrozen() no-ops on the first climb (frozen null) and the routeless
-            // re-anchor (frozenRouteless), so only a genuine routed advance is recorded.
+            // recordFrozen() no-ops on the first climb (frozen null); a route-less climb
+            // replaced here (rejoin mid-climb) is recorded as what was ridden.
             recordFrozen()
             // starting a new climb: reset the ridden tracker (clearFrozen isn't called on
             // a straight number advance, only on a null-frame end)
             climbRidden = 0.0
             climbElevGained = 0.0
+            clearTrace()
             val pos = progress ?: return null // need DTD once to anchor the snapshot
             val length = (distFromBottom ?: 0.0) + (distToTop ?: 0.0)
             if (length <= 0.0) return null
             val climbStart = (pos - (distFromBottom ?: 0.0)).coerceAtLeast(0.0)
-            val totalElevation = info.climbElevation
-                ?: ((info.elevationFromBottom ?: 0.0) + (info.elevationToTop ?: 0.0))
+            // Climb gain = gain done from the bottom + gain remaining to the top. Do NOT use
+            // the stream's CLIMB_ELEVATION: it's the rider's current altitude, not the climb's
+            // gain (real ride: ce=446 m reported for a ~68 m climb -> a bogus 31% avgGrade).
+            val totalElevation = (info.elevationFromBottom ?: 0.0) + (info.elevationToTop ?: 0.0)
             frozen = ClimbData(
                 startDistance = climbStart,
                 length = length,
@@ -300,6 +351,9 @@ class ClimbStateBuilder {
             distToTop != null -> climb.endDistance - distToTop
             else -> climb.startDistance
         }.coerceIn(climb.startDistance, climb.endDistance)
+
+        // Live-trace the ridden silhouette only when Karoo sent no route profile to slice.
+        if (route.profile == null) recordTracePoint(info, climb)
 
         val active = ClimbUiState.ActiveClimb(
             climb = climb,
@@ -329,7 +383,7 @@ class ClimbStateBuilder {
      * climb-relative coordinates (start = 0), no upcoming list, null profile (the view
      * draws a constant-grade wedge). Frozen like [onClimb] for a stable silhouette.
      */
-    private fun routelessClimb(info: ClimbInfo): Pair<ClimbUiState.ActiveClimb, Double>? {
+    private fun routelessClimb(info: ClimbInfo, progress: Double?): Pair<ClimbUiState.ActiveClimb, Double>? {
         val distToTop = info.distanceToTop
         val distFromBottom = info.distanceFromBottom
         val number = info.climbNumber
@@ -337,8 +391,16 @@ class ClimbStateBuilder {
         if (frozen == null || !frozenRouteless || (number != null && number != frozenNumber)) {
             val length = (distFromBottom ?: 0.0) + (distToTop ?: 0.0)
             if (length <= 0.0) return null
-            val totalElevation = info.climbElevation
-                ?: ((info.elevationFromBottom ?: 0.0) + (info.elevationToTop ?: 0.0))
+            // New climb identity: record the one just finished (off-route climbs count too),
+            // then reset the ridden tracker + live trace. All no-op on the very first climb.
+            recordFrozen()
+            climbRidden = 0.0
+            climbElevGained = 0.0
+            clearTrace()
+            // Climb gain = gain done from the bottom + gain remaining to the top. Do NOT use
+            // the stream's CLIMB_ELEVATION: it's the rider's current altitude, not the climb's
+            // gain (real ride: ce=446 m reported for a ~68 m climb -> a bogus 31% avgGrade).
+            val totalElevation = (info.elevationFromBottom ?: 0.0) + (info.elevationToTop ?: 0.0)
             frozen = ClimbData(
                 startDistance = 0.0,
                 length = length,
@@ -347,6 +409,9 @@ class ClimbStateBuilder {
             )
             frozenNumber = number
             frozenRouteless = true
+            // Absolute climb bottom from the route position, for completion dedup (the span
+            // above is relative). Null with no progress (pure route-less) -> falls back to it.
+            frozenAbsStart = progress?.let { (it - (distFromBottom ?: 0.0)).coerceAtLeast(0.0) }
         }
         val climb = frozen!!
 
@@ -355,6 +420,9 @@ class ClimbStateBuilder {
             distToTop != null -> climb.length - distToTop
             else -> 0.0
         }.coerceIn(0.0, climb.length)
+
+        // Live-trace the ridden silhouette (wedge climb, no route profile).
+        recordTracePoint(info, climb)
 
         val active = ClimbUiState.ActiveClimb(
             climb = climb,
@@ -365,6 +433,16 @@ class ClimbStateBuilder {
             elevationToTop = info.elevationToTop
                 ?: elevationToTop(null, climb, riderPos),
         )
+
+        // Furthest point ridden (relative coords) so an off-route completion records what was
+        // actually ridden and its real grade — mirrors onClimb.
+        val ridden = (distFromBottom ?: riderPos).coerceAtLeast(0.0)
+        if (ridden >= climbRidden) {
+            climbRidden = ridden
+            climbElevGained =
+                (info.elevationFromBottom ?: (climb.totalElevation - active.elevationToTop))
+                    .coerceAtLeast(0.0)
+        }
         return active to riderPos
     }
 
@@ -387,6 +465,42 @@ class ClimbStateBuilder {
             distanceToTop = (next.endDistance - progress).coerceAtLeast(0.0),
             elevationToTop = elevationToTop(route.profile, next, progress),
         )
+    }
+
+    /**
+     * Record one live-trace sample for the current wedge climb: a real
+     * (distance, elevation-from-bottom) pair in the active climb's coordinate frame.
+     * Downsampled to one point per [TRACE_STEP_M]. Recomposes [tracedProfile] only on an
+     * actual append, so its object identity stays stable between samples. Skips frames the
+     * stream sends without elevationFromBottom (there's no reliable substitute).
+     */
+    private fun recordTracePoint(info: ClimbInfo, climb: ClimbData) {
+        val d = info.distanceFromBottom ?: return
+        val e = info.elevationFromBottom ?: return
+        val x = (climb.startDistance + d).coerceIn(climb.startDistance, climb.endDistance)
+        val last = tracedPoints.lastOrNull()
+        if (last != null && x - last.distance < TRACE_STEP_M) return // downsample / drop backward
+        // Reject glitchy samples instead of letting one spike the silhouette (blowing up its
+        // elevation span → squashed profile, and its segment grades → absurd %): elevation-
+        // from-bottom lives in [0, climbTotal]. Then clamp small noise to non-decreasing,
+        // since while climbing the gain from the bottom only ever rises.
+        val total = climb.totalElevation
+        if (total <= 0.0 || e < -1.0 || e > total + 1.0) return
+        val y = e.coerceIn(last?.elevation ?: 0.0, total)
+        tracedPoints.add(ElevationProfile.Point(x, y))
+        tracedProfile = composeTrace(climb)
+    }
+
+    /** Bottom anchor + real observations + a straight line to the known top. */
+    private fun composeTrace(climb: ClimbData): ElevationProfile? {
+        if (tracedPoints.isEmpty()) return null
+        val pts = ArrayList<ElevationProfile.Point>(tracedPoints.size + 2)
+        pts.add(ElevationProfile.Point(climb.startDistance, 0.0))
+        pts.addAll(tracedPoints)
+        if (pts.last().distance < climb.endDistance - 1.0) {
+            pts.add(ElevationProfile.Point(climb.endDistance, climb.totalElevation))
+        }
+        return ElevationProfile.fromPoints(pts)
     }
 
     private fun elevationToTop(profile: ElevationProfile?, climb: ClimbData, pos: Double): Double {

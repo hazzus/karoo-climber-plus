@@ -10,8 +10,10 @@ import com.hazzus.karooclimber.data.RouteData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 class ClimbStateBuilderTest {
 
@@ -367,5 +369,178 @@ class ClimbStateBuilderTest {
         // Same climb, now with a route + DTD: must re-snapshot to route coordinates.
         val s = shown(builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger))
         assertEquals(1000.0, s.active!!.climb.startDistance, 1e-9) // 1200 − 200, not 0
+    }
+
+    // --- Live-traced silhouette of the ridden part of a wedge (null-profile) climb ---
+
+    @Test
+    fun `traced profile grows monotonically and spans the whole climb`() {
+        val builder = ClimbStateBuilder()
+        // Route-less wedge climb, 600 m / +60 m, fed real from-bottom samples ~1 Hz.
+        builder.build(null, null, ClimbInfo(500.0, 50.0, 100.0, 10.0, 60.0, 1, 1), trigger)
+        builder.build(null, null, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 1), trigger)
+        val s = shown(builder.build(null, null, ClimbInfo(300.0, 30.0, 300.0, 30.0, 60.0, 1, 1), trigger))
+        assertNull(s.profile) // wedge climb: the trace supplements the wedge
+        val traced = s.tracedProfile!!
+        // Spans the climb frame: bottom anchor at 0, straight line to the known top at length.
+        assertEquals(0.0, traced.points.first().distance, 1e-9)
+        assertEquals(600.0, traced.points.last().distance, 1e-9)
+        // Strictly increasing in distance.
+        assertTrue(traced.points.zipWithNext().all { (a, b) -> a.distance < b.distance })
+        // Last real sample sits at the rider's distanceFromBottom (just before the top anchor).
+        assertEquals(300.0, traced.points[traced.points.size - 2].distance, 1e-9)
+        assertEquals(30.0, traced.elevationAt(300.0), 1e-9)
+    }
+
+    @Test
+    fun `traced profile preserves a non-linear ridden shape`() {
+        val builder = ClimbStateBuilder()
+        // Steep start: elevation-from-bottom is NOT linear in distance-from-bottom.
+        builder.build(null, null, ClimbInfo(500.0, 20.0, 100.0, 40.0, 60.0, 1, 1), trigger)
+        val s = shown(builder.build(null, null, ClimbInfo(300.0, 10.0, 300.0, 50.0, 60.0, 1, 1), trigger))
+        val traced = s.tracedProfile!!
+        val wedge = 60.0 * 300.0 / 600.0 // constant-grade wedge value at the midpoint = 30
+        assertEquals(50.0, traced.elevationAt(300.0), 1e-9) // real observation, not the wedge
+        assertTrue(abs(traced.elevationAt(300.0) - wedge) > 1.0)
+    }
+
+    @Test
+    fun `traced profile resets on a new climb number`() {
+        val builder = ClimbStateBuilder()
+        builder.build(null, null, ClimbInfo(500.0, 50.0, 100.0, 10.0, 60.0, 1, 2), trigger)
+        builder.build(null, null, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        val s1 = shown(builder.build(null, null, ClimbInfo(300.0, 30.0, 300.0, 30.0, 60.0, 1, 2), trigger))
+        assertEquals(5, s1.tracedProfile!!.points.size) // bottom + 3 samples + top
+        // Straight onto climb 2 (new number, no null frame): the previous trace is dropped.
+        val s2 = shown(builder.build(null, null, ClimbInfo(550.0, 55.0, 50.0, 5.0, 60.0, 2, 2), trigger))
+        assertEquals(3, s2.tracedProfile!!.points.size) // bottom + 1 fresh sample + top
+    }
+
+    @Test
+    fun `traced profile clears when the stream ends and starts fresh`() {
+        val builder = ClimbStateBuilder()
+        builder.build(null, null, ClimbInfo(500.0, 50.0, 100.0, 10.0, 60.0, 1, 1), trigger)
+        builder.build(null, null, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 1), trigger)
+        // Stream ends (no route, no climb) -> Hidden and the trace is dropped.
+        assertEquals(ClimbUiState.Hidden, builder.build(null, null, null, trigger))
+        // A fresh climb: the trace does not carry the previous climb's samples.
+        val s = shown(builder.build(null, null, ClimbInfo(500.0, 50.0, 100.0, 10.0, 60.0, 1, 1), trigger))
+        assertEquals(3, s.tracedProfile!!.points.size) // bottom + 1 fresh sample + top
+    }
+
+    @Test
+    fun `climb gain uses from-bottom plus to-top, not the stream CLIMB_ELEVATION`() {
+        // Real-ride reroute frame: CLIMB_ELEVATION (446) is the rider's altitude, not the
+        // climb's gain. The climb gains efb + ett = ~68 m over 1440 m => ~4.7%, not 31%.
+        val info = ClimbInfo(
+            distanceToTop = 1438.0, elevationToTop = 68.0,
+            distanceFromBottom = 2.0, elevationFromBottom = 0.0,
+            climbElevation = 446.0, climbNumber = null, totalClimbs = null,
+        )
+        val climb = shown(ClimbStateBuilder().build(null, null, info, trigger)).active!!.climb
+        assertEquals(1440.0, climb.length, 1e-9)
+        assertEquals(68.0, climb.totalElevation, 1e-9) // efb + ett, NOT the 446 altitude
+        assertEquals(68.0 / 1440.0 * 100.0, climb.avgGrade, 1e-9) // ~4.7%, not 31%
+    }
+
+    @Test
+    fun `traced profile ignores frames without elevationFromBottom`() {
+        val builder = ClimbStateBuilder()
+        // No elevationFromBottom: we no longer reconstruct it from CLIMB_ELEVATION (unreliable),
+        // so there's nothing to trace this frame.
+        val s = shown(builder.build(null, null, ClimbInfo(400.0, 40.0, 200.0, null, 60.0, 1, 1), trigger))
+        assertNull(s.tracedProfile)
+    }
+
+    @Test
+    fun `traced profile stays null without any elevation signal`() {
+        val builder = ClimbStateBuilder()
+        // No elevationFromBottom, no climbElevation, no elevationToTop -> nothing to trace.
+        val s = shown(builder.build(null, null, ClimbInfo(400.0, null, 200.0, null, null, 1, 1), trigger))
+        assertNull(s.tracedProfile)
+        assertNull(s.profile)
+    }
+
+    @Test
+    fun `traced profile downsamples samples closer than the trace step`() {
+        val builder = ClimbStateBuilder()
+        val s1 = shown(builder.build(null, null, ClimbInfo(500.0, 50.0, 100.0, 10.0, 60.0, 1, 1), trigger))
+        val before = s1.tracedProfile!!.points.size
+        // Second frame only 5 m further (< TRACE_STEP_M) -> no new point, same object.
+        val s2 = shown(builder.build(null, null, ClimbInfo(495.0, 12.0, 105.0, 12.0, 60.0, 1, 1), trigger))
+        assertEquals(before, s2.tracedProfile!!.points.size)
+        assertSame(s1.tracedProfile, s2.tracedProfile) // identity stable (no rebuild)
+    }
+
+    @Test
+    fun `traced profile rejects an elevation spike above the climb total`() {
+        val builder = ClimbStateBuilder()
+        val s1 = shown(builder.build(null, null, ClimbInfo(500.0, 50.0, 100.0, 10.0, 60.0, 1, 1), trigger))
+        val n1 = s1.tracedProfile!!.points.size
+        // Glitchy frame: elevationFromBottom 500 >> climbElevation 60 -> dropped, no spike.
+        val s2 = shown(builder.build(null, null, ClimbInfo(400.0, 40.0, 200.0, 500.0, 60.0, 1, 1), trigger))
+        val traced = s2.tracedProfile!!
+        assertEquals(n1, traced.points.size) // the glitch was not recorded
+        assertTrue(traced.points.all { it.elevation <= 60.0 + 1e-9 }) // never above the climb total
+    }
+
+    @Test
+    fun `traced profile clamps a downward elevation dip to non-decreasing`() {
+        val builder = ClimbStateBuilder()
+        builder.build(null, null, ClimbInfo(400.0, 40.0, 200.0, 30.0, 60.0, 1, 1), trigger) // (200, 30)
+        // Next frame dips to 20 (noise); a climb only rises from the bottom -> clamped up to 30.
+        val s = shown(builder.build(null, null, ClimbInfo(300.0, 30.0, 300.0, 20.0, 60.0, 1, 1), trigger))
+        val traced = s.tracedProfile!!
+        assertTrue(traced.points.zipWithNext().all { (a, b) -> b.elevation >= a.elevation - 1e-9 })
+        assertEquals(30.0, traced.elevationAt(300.0), 1e-9) // dip clamped to the prior 30
+    }
+
+    // --- Recording climbs ridden off the route / during a reroute ---
+
+    @Test
+    fun `a climb ridden during a reroute is recorded on top-out`() {
+        val builder = ClimbStateBuilder()
+        val rr = route.copy(rerouting = true, climbs = listOf(ClimbData(5000.0, 600.0, 10.0, 60.0)))
+        // On the climb from the live stream: 500 m up a 600 m / 60 m climb, no climb number.
+        builder.build(rr, 12_000.0, ClimbInfo(100.0, 10.0, 500.0, 50.0, 60.0, null, null), trigger)
+        // Stream goes null -> recorded, even though the climb is off the route.
+        val s = shown(builder.build(rr, 12_100.0, null, trigger))
+        assertEquals(1, s.completed.size)
+        assertEquals(500.0, s.completed[0].length, 1e-9) // the ridden portion
+        assertEquals(10.0, s.completed[0].avgGrade, 1e-9) // 50 m over 500 m
+        assertNull(s.completed[0].climbNumber) // off-route: no number
+    }
+
+    @Test
+    fun `two off-route climbs of equal length are both recorded (distinct absolute spans)`() {
+        val builder = ClimbStateBuilder()
+        val rr = route.copy(rerouting = true, climbs = emptyList())
+        // Climb 1 near route position 10 km.
+        builder.build(rr, 10_000.0, ClimbInfo(100.0, 10.0, 500.0, 50.0, 60.0, null, null), trigger)
+        builder.build(rr, 10_100.0, null, trigger)
+        // Climb 2: identical length, far along the route -> distinct span, not deduped away.
+        builder.build(rr, 20_000.0, ClimbInfo(100.0, 10.0, 500.0, 50.0, 60.0, null, null), trigger)
+        builder.build(rr, 20_100.0, null, trigger)
+        assertEquals(2, builder.completedClimbs.size)
+    }
+
+    @Test
+    fun `a pure route-less climb is recorded on top-out`() {
+        val builder = ClimbStateBuilder()
+        builder.build(null, null, ClimbInfo(100.0, 10.0, 500.0, 50.0, 60.0, null, null), trigger)
+        builder.build(null, null, null, trigger) // no route, no climb -> Hidden + recorded
+        assertEquals(1, builder.completedClimbs.size)
+    }
+
+    @Test
+    fun `a reroute climb re-detected after a flap is recorded once`() {
+        val builder = ClimbStateBuilder()
+        val rr = route.copy(rerouting = true, climbs = emptyList())
+        builder.build(rr, 10_000.0, ClimbInfo(100.0, 10.0, 500.0, 50.0, 60.0, null, null), trigger)
+        builder.build(rr, 10_050.0, null, trigger) // brief flap -> recorded (absStart ~9500)
+        // Same climb re-detected (rider advanced 50 m; the bottom stays put), then ends again.
+        builder.build(rr, 10_050.0, ClimbInfo(50.0, 5.0, 550.0, 55.0, 60.0, null, null), trigger)
+        builder.build(rr, 10_100.0, null, trigger)
+        assertEquals(1, builder.completedClimbs.size) // same bucketed absolute span -> deduped
     }
 }

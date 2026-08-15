@@ -46,6 +46,11 @@ sealed interface ClimbUiState {
         val active: ActiveClimb?,
         /** Climbs already completed this ride, in completion order. */
         val completed: List<CompletedClimb> = emptyList(),
+        /** Live-traced real silhouette of the ridden portion of the active climb, in the
+         *  active climb's coordinate frame (climb.startDistance..climb.endDistance, elevation
+         *  measured from the climb bottom = 0). Non-null only when [profile] is null (wedge
+         *  climb) and we've observed >=1 real elevation-from-bottom sample. */
+        val tracedProfile: ElevationProfile? = null,
     ) : ClimbUiState {
         /** Climbs not yet started, in route order. */
         val upcoming: List<ClimbData>

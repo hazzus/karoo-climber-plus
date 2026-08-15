@@ -14,6 +14,11 @@ data class ClimbInfo(
     val elevationToTop: Double?,
     val distanceFromBottom: Double?,
     val elevationFromBottom: Double?,
+    /**
+     * Karoo's `CLIMB_ELEVATION` field. NOT the climb's total gain — observed on real rides to
+     * be the rider's current absolute altitude (e.g. 446 m at the foot of a ~68 m climb). Do
+     * not use it as gain; the climb's gain is [elevationFromBottom] + [elevationToTop].
+     */
     val climbElevation: Double?,
     val climbNumber: Int?,
     val totalClimbs: Int?,

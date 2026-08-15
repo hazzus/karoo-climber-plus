@@ -246,6 +246,8 @@ class ClimbOverlayView(context: Context) : View(context) {
         isImperial: Boolean = imperial,
         newSysValues: Map<String, Map<String, Double>> = sysValues,
     ) {
+        // read the previous trace before `state` is reassigned below
+        val prevTraced = state?.tracedProfile
         val newKey = newState.active?.climb?.let { it.startDistance to it.endDistance }
         if (newKey != activeKey) {
             if (newKey != null) machine.onNewClimb(newSettings.autoExpand) else machine.onClimbEnded()
@@ -253,6 +255,10 @@ class ClimbOverlayView(context: Context) : View(context) {
             if (newKey != null) rebuildClimbCache(newState)
             listScrollPx = 0f
             onRelayoutNeeded?.invoke()
+        } else if (newKey != null && newState.tracedProfile !== prevTraced) {
+            // same climb, but the wedge trace grew (Step A appends a new instance ~per
+            // 10 m of ascent): refresh the silhouette + colors, no key-change side effects
+            rebuildClimbCache(newState)
         }
         newState.active?.let { machine.onProgress(it.distanceToTop) }
         state = newState
@@ -312,7 +318,9 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     private fun rebuildClimbCache(s: ClimbUiState.Shown) {
         val climb = s.active?.climb ?: return
-        val profile = s.profile
+        // prefer the live-traced real silhouette of the ridden portion (wedge climbs);
+        // it shares the active climb's coordinate frame, so the domain/min-max below hold
+        val profile = s.tracedProfile ?: s.profile
         if (profile != null) {
             cachePoints = profile.slice(climb.startDistance, climb.endDistance)
             cacheSegments =
@@ -654,6 +662,14 @@ class ClimbOverlayView(context: Context) : View(context) {
     ): List<ElevationProfile.Segment> {
         val climb = active.climb
         val profile = s.profile
+        // Wedge (no real profile ahead): the best estimate of the slope ahead is the actual
+        // average grade of the climb still remaining (elevationToTop / distanceToTop), which
+        // tracks reality as the rider climbs — not the frozen whole-climb avgGrade.
+        val wedgeGrade = if (active.distanceToStart <= 0.0 && active.distanceToTop > 1.0) {
+            active.elevationToTop / active.distanceToTop * 100.0
+        } else {
+            climb.avgGrade
+        }
         val result = ArrayList<ElevationProfile.Segment>(CHUNK_STRIP_CELLS)
         var start = s.progress.coerceAtLeast(climb.startDistance)
         while (result.size < CHUNK_STRIP_CELLS) {
@@ -662,7 +678,7 @@ class ClimbOverlayView(context: Context) : View(context) {
             val grade = if (profile != null) {
                 (profile.elevationAt(end) - profile.elevationAt(start)) / (end - start) * 100.0
             } else {
-                climb.avgGrade
+                wedgeGrade
             }
             result.add(ElevationProfile.Segment(start, end, grade))
             start = end
@@ -1142,7 +1158,7 @@ class ClimbOverlayView(context: Context) : View(context) {
     }
 
     private fun elevationAtProgress(s: ClimbUiState.Shown, active: ClimbUiState.ActiveClimb): Double =
-        s.profile?.elevationAt(s.progress)
+        (s.tracedProfile ?: s.profile)?.elevationAt(s.progress)
             ?: (active.climb.totalElevation *
                 ((s.progress - active.climb.startDistance) / active.climb.length).coerceIn(0.0, 1.0))
 
