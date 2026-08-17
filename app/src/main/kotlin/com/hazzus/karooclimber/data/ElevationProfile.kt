@@ -63,7 +63,8 @@ class ElevationProfile private constructor(
     }
 
     companion object {
-        private const val ELEVATION_POLYLINE_FACTOR = 10.0 // precision 1
+        /** Karoo's elevation-polyline scale (precision 1). Shared with CompletedClimb's profile codec. */
+        internal const val ELEVATION_POLYLINE_FACTOR = 10.0 // precision 1
 
         fun fromPolyline(encoded: String?): ElevationProfile? {
             if (encoded.isNullOrEmpty()) return null

@@ -51,6 +51,9 @@ sealed interface ClimbUiState {
          *  measured from the climb bottom = 0). Non-null only when [profile] is null (wedge
          *  climb) and we've observed >=1 real elevation-from-bottom sample. */
         val tracedProfile: ElevationProfile? = null,
+        /** True during a reroute: the climbs are in a rebased frame with no reliable mapping to
+         *  the route profile, so an upcoming climb's preview is unavailable (see the view). */
+        val rerouting: Boolean = false,
     ) : ClimbUiState {
         /** Climbs not yet started, in route order. */
         val upcoming: List<ClimbData>

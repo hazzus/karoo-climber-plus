@@ -59,6 +59,16 @@ class ClimbOverlayView(context: Context) : View(context) {
     private var listScrollPx = 0f
     private var sysValues: Map<String, Map<String, Double>> = emptyMap()
 
+    /** Which full-list row (if any) is expanded to its inline detail; null = none. */
+    private sealed interface RowSel {
+        data class Done(val climb: CompletedClimb) : RowSel
+        data class Ahead(val startDistance: Double) : RowSel
+    }
+    private var selectedRow: RowSel? = null
+
+    /** Hit rects for the visible FULL-list rows, rebuilt each scrollable draw (screen coords). */
+    private val rowHitRects = mutableListOf<Pair<RectF, RowSel>>()
+
     /** Momentary banner naming the view mode, shown right after a tap-cycle switch. */
     private var modeFlashText = ""
     private var modeFlashUntil = 0L
@@ -93,7 +103,15 @@ class ClimbOverlayView(context: Context) : View(context) {
                     PanelSize.CHIP -> resize { machine.expand() }
                     PanelSize.EXPANDED ->
                         if (s.active != null) cycleMode(s) else resize { machine.expand() }
-                    PanelSize.FULL -> if (s.active != null) cycleMode(s)
+                    PanelSize.FULL ->
+                        if (s.active != null) {
+                            cycleMode(s)
+                        } else {
+                            // list shown: hit-test the visible rows; tap toggles the
+                            // inline expander (same row collapses, a new row switches)
+                            val hit = rowHitRects.firstOrNull { it.first.contains(e.x, e.y) }?.second
+                            if (hit != null) selectedRow = if (selectedRow == hit) null else hit
+                        }
                 }
                 invalidate()
                 return true
@@ -169,7 +187,14 @@ class ClimbOverlayView(context: Context) : View(context) {
         when (event.keyCode) {
             KeyEvent.KEYCODE_BACK -> {
                 if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) {
-                    resize { machine.collapse() }
+                    // nested: an open inline expander collapses first; only a second
+                    // BACK (or BACK with no expander open) shrinks the panel a step
+                    if (selectedRow != null && machine.size == PanelSize.FULL && state?.active == null) {
+                        selectedRow = null
+                        invalidate()
+                    } else {
+                        resize { machine.collapse() }
+                    }
                 }
             }
             KeyEvent.KEYCODE_NAVIGATE_PREVIOUS,
@@ -234,6 +259,7 @@ class ClimbOverlayView(context: Context) : View(context) {
     private inline fun resize(change: () -> Unit) {
         change()
         listScrollPx = 0f
+        selectedRow = null // any panel-size change collapses the inline expander
         onRelayoutNeeded?.invoke()
         invalidate()
     }
@@ -262,6 +288,8 @@ class ClimbOverlayView(context: Context) : View(context) {
         }
         newState.active?.let { machine.onProgress(it.distanceToTop) }
         state = newState
+        // the scrollable list (and its expander) isn't shown while a climb is active
+        if (newState.active != null) selectedRow = null
         settings = newSettings
         palette = GradePalettes.byId(newSettings.paletteId)
         imperial = isImperial
@@ -299,6 +327,8 @@ class ClimbOverlayView(context: Context) : View(context) {
                 s.completed,
                 s.upcoming.firstOrNull()?.let { formatValue(it.startDistance - s.progress) },
                 listScrollPx,
+                selectedRow, // repaint when only the inline expander selection differs
+                s.rerouting, // reroute toggles the preview's availability message
                 s.climbs.map { climb ->
                     if (s.progress >= climb.startDistance) "now"
                     else formatKm(climb.startDistance - s.progress)
@@ -1060,26 +1090,72 @@ class ClimbOverlayView(context: Context) : View(context) {
         val gap = height * 0.012f
         val rowH = if (scrollable) height * 0.105f else (height - listTop - pad - 2 * gap) / 3f
 
+        // FULL only: an inline detail panel drops beneath the tapped row (accordion),
+        // pushing the rows below it down. EXPANDED stays a plain non-scrollable list.
+        val expH = height * 0.42f
+        if (scrollable) {
+            rowHitRects.clear()
+            // is the selected row actually present this frame? only then does its
+            // expander occupy space / factor into the scroll clamp
+            val expandedVisible = when (val sel = selectedRow) {
+                is RowSel.Done -> completedRows.contains(sel.climb)
+                is RowSel.Ahead -> aheadRows.any { it.startDistance == sel.startDistance }
+                null -> false
+            }
+            // total content height BEFORE drawing, so maxListScroll() clamps correctly
+            // even when the selected row (and its expander) sit below the fold
+            var contentH = rowCount * (rowH + gap) - gap
+            if (expandedVisible) contentH += expH + gap
+            lastRowsHeight = contentH
+            lastListAreaHeight = height - pad - listTop
+            listScrollPx = listScrollPx.coerceIn(0f, maxListScroll())
+        }
+
         canvas.save()
         canvas.clipRect(0f, listTop, width.toFloat(), height - pad)
         val rowPad = width * 0.045f
         var y = listTop - if (scrollable) listScrollPx else 0f
+        // at most one expander (contentH above budgets exactly one) — guards the
+        // degenerate case of two value-equal rows both matching selectedRow
+        var expanderDrawn = false
         for (climb in completedRows) {
+            val rect = RectF(rowPad, y, width - rowPad, y + rowH)
             if (y + rowH > listTop && y < height) {
-                drawCompletedRow(canvas, climb, RectF(rowPad, y, width - rowPad, y + rowH))
+                drawCompletedRow(canvas, climb, rect)
+                if (scrollable) rowHitRects += RectF(rect) to RowSel.Done(climb)
             }
             y += rowH + gap
+            // inline expander beneath the selected completed row; advance y even when
+            // it's off-screen so the scroll accounting above stays correct
+            if (scrollable && !expanderDrawn && (selectedRow as? RowSel.Done)?.climb == climb) {
+                val er = RectF(rowPad, y, width - rowPad, y + expH)
+                if (y + expH > listTop && y < height) drawCompletedExpander(canvas, climb, er)
+                y += expH + gap
+                expanderDrawn = true
+            }
         }
         for (climb in aheadRows) {
+            val rect = RectF(rowPad, y, width - rowPad, y + rowH)
             if (y + rowH > listTop && y < height) {
-                drawClimbRow(canvas, s, climb, RectF(rowPad, y, width - rowPad, y + rowH))
+                drawClimbRow(canvas, s, climb, rect)
+                if (scrollable) rowHitRects += RectF(rect) to RowSel.Ahead(climb.startDistance)
             }
             y += rowH + gap
+            if (scrollable && !expanderDrawn && (selectedRow as? RowSel.Ahead)?.startDistance == climb.startDistance) {
+                val er = RectF(rowPad, y, width - rowPad, y + expH)
+                if (y + expH > listTop && y < height) drawAheadExpander(canvas, s, climb, er)
+                y += expH + gap
+                expanderDrawn = true
+            }
         }
         canvas.restore()
 
-        lastRowsHeight = rowCount * (rowH + gap) - gap
-        lastListAreaHeight = height - pad - listTop
+        // scrollable set lastRowsHeight (incl. the expander) before the loop; the
+        // non-scrollable drawer keeps its original post-loop bookkeeping unchanged
+        if (!scrollable) {
+            lastRowsHeight = rowCount * (rowH + gap) - gap
+            lastListAreaHeight = height - pad - listTop
+        }
     }
 
     private fun drawClimbRow(canvas: Canvas, s: ClimbUiState.Shown, climb: ClimbData, rect: RectF) {
@@ -1130,6 +1206,113 @@ class ClimbOverlayView(context: Context) : View(context) {
         val inset = rect.height() * 0.2f
         canvas.drawLine(rect.left + colW, rect.top + inset, rect.left + colW, rect.bottom - inset, splicePaint)
         canvas.drawLine(rect.left + 2 * colW, rect.top + inset, rect.left + 2 * colW, rect.bottom - inset, splicePaint)
+    }
+
+    /** Completed-climb detail: saved profile on top, then TIME + AVG POWER rows. */
+    private fun drawCompletedExpander(canvas: Canvas, climb: CompletedClimb, rect: RectF) {
+        canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, cellPaint)
+        val inset = rect.width() * 0.03f
+        val chartH = rect.height() * 0.55f
+        val chart = RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.top + chartH)
+        val pts = climb.profile ?: wedgePoints(climb.length, climb.totalElevation ?: climb.length * climb.avgGrade / 100.0)
+        drawProfilePreview(canvas, pts, chart)
+
+        val statsTop = rect.top + chartH + inset
+        val rowH2 = (rect.bottom - statsTop - inset) / 2f
+        val statLeft = rect.left + inset * 2
+        val statRight = rect.right - inset * 2
+        drawStatRow(canvas, "TIME", climb.elapsedS?.let { formatDuration(it) } ?: "—",
+            RectF(statLeft, statsTop, statRight, statsTop + rowH2))
+        drawStatRow(canvas, "AVG POWER", climb.avgPower?.let { "${it.roundToInt()} W" } ?: "—",
+            RectF(statLeft, statsTop + rowH2, statRight, rect.bottom - inset))
+    }
+
+    /** Upcoming-climb detail: its elevation profile cut live from the route (wedge fallback). */
+    private fun drawAheadExpander(canvas: Canvas, s: ClimbUiState.Shown, climb: ClimbData, rect: RectF) {
+        canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, cellPaint)
+        val inset = rect.width() * 0.03f
+        val chart = RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset)
+        if (s.rerouting) {
+            // rebased reroute frame doesn't map to the route profile — say so instead of
+            // drawing a misleading slice; the real preview resumes once back on route
+            drawPreviewUnavailable(canvas, chart)
+            return
+        }
+        val pts = s.profile?.slice(climb.startDistance, climb.endDistance)
+            ?.map { ElevationProfile.Point(it.distance - climb.startDistance, it.elevation) }
+            ?.takeIf { it.size >= 2 }
+            ?: wedgePoints(climb.length, climb.totalElevation)
+        drawProfilePreview(canvas, pts, chart)
+    }
+
+    /** Two centered lines telling the rider the preview can't be drawn during a reroute. */
+    private fun drawPreviewUnavailable(canvas: Canvas, chart: RectF) {
+        subTextPaint.textAlign = Paint.Align.CENTER
+        subTextPaint.textSize = chart.height() * 0.18f
+        val longest = "PREVIEW UNAVAILABLE"
+        val maxW = chart.width() * 0.9f
+        val w = subTextPaint.measureText(longest)
+        if (w > maxW) subTextPaint.textSize *= maxW / w
+        val t = subTextPaint.textSize
+        canvas.drawText(longest, chart.centerX(), chart.centerY() - t * 0.15f, subTextPaint)
+        canvas.drawText("DURING REROUTE", chart.centerX(), chart.centerY() + t * 1.05f, subTextPaint)
+    }
+
+    private fun wedgePoints(length: Double, totalElevation: Double) = listOf(
+        ElevationProfile.Point(0.0, 0.0),
+        ElevationProfile.Point(length, totalElevation),
+    )
+
+    /** A label:value row (label left, value right), reusing the panel text paints. */
+    private fun drawStatRow(canvas: Canvas, label: String, value: String, r: RectF) {
+        subTextPaint.textAlign = Paint.Align.LEFT
+        subTextPaint.textSize = r.height() * 0.5f
+        canvas.drawText(label, r.left, r.centerY() - (subTextPaint.ascent() + subTextPaint.descent()) / 2f, subTextPaint)
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = r.height() * 0.55f
+        canvas.drawText(value, r.right, r.centerY() - (textPaint.ascent() + textPaint.descent()) / 2f, textPaint)
+    }
+
+    /**
+     * Standalone climb-profile silhouette for the accordion preview: self-contained (its own
+     * min/max + local Path), so it never touches the active-climb cache (cachePoints/profilePath).
+     * Colors per ~100 m grade chunk like drawProfile; no rider marker / past-shade / strip.
+     */
+    private fun drawProfilePreview(canvas: Canvas, points: List<ElevationProfile.Point>, chart: RectF) {
+        if (points.size < 2) return
+        val d0 = points.first().distance
+        val d1 = points.last().distance
+        if (d1 <= d0) return
+        val minE = points.minOf { it.elevation }
+        val spanE = (points.maxOf { it.elevation } - minE).coerceAtLeast(10.0)
+        val xScale = chart.width() / (d1 - d0)
+        fun xOf(d: Double) = chart.left + ((d - d0) * xScale).toFloat()
+        fun yOf(e: Double) = chart.bottom - ((e - minE) / spanE * chart.height() * PROFILE_MAX_FRACTION).toFloat()
+
+        val path = Path()
+        path.moveTo(xOf(d0), chart.bottom)
+        for (p in points) path.lineTo(xOf(p.distance), yOf(p.elevation))
+        path.lineTo(xOf(d1), chart.bottom)
+        path.close()
+
+        val segs = ElevationProfile.fromPoints(points)?.segments(d0, d1, GRADE_CHUNK_METERS) ?: emptyList()
+        canvas.save()
+        canvas.clipRect(chart)
+        canvas.clipPath(path)
+        if (segs.isEmpty()) {
+            fillPaint.color = palette.colorFor(0.0)
+            canvas.drawRect(chart, fillPaint)
+        } else {
+            for (seg in segs) {
+                fillPaint.color = if (seg.grade < 0 && palette.bands.last().first >= 0.0) {
+                    GradePalettes.descentColor
+                } else {
+                    palette.colorFor(seg.grade)
+                }
+                canvas.drawRect(xOf(seg.start), chart.top, xOf(seg.end), chart.bottom, fillPaint)
+            }
+        }
+        canvas.restore()
     }
 
     private var lastRowsHeight = 0f

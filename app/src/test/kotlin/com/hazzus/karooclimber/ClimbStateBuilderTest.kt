@@ -8,6 +8,7 @@ import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.data.ElevationProfile
 import com.hazzus.karooclimber.data.RouteData
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -165,6 +166,24 @@ class ClimbStateBuilderTest {
         assertEquals(300.0, active.distanceToStart, 1e-9) // straight from startDistance
         assertEquals(900.0, active.distanceToTop, 1e-9) // 300 + 600
         assertEquals(60.0, active.elevationToTop, 1e-9) // full climb ahead, from the wedge
+    }
+
+    @Test
+    fun `rerouting flags previews unavailable (rebased frame has no profile mapping)`() {
+        val rr = route.copy(
+            rerouting = true,
+            climbs = listOf(ClimbData(startDistance = 300.0, length = 600.0, avgGrade = 10.0, totalElevation = 60.0)),
+        )
+        val s = shown(ClimbStateBuilder().build(rr, 42_000.0, null, trigger))
+        assertTrue(s.rerouting) // the view shows "preview unavailable" instead of a slice/wedge
+        assertNull(s.profile)
+    }
+
+    @Test
+    fun `on-route previews are available (not flagged rerouting)`() {
+        val s = shown(ClimbStateBuilder().build(route, 200.0, null, trigger))
+        assertFalse(s.rerouting) // the view slices the real profile for the preview
+        assertNotNull(s.profile)
     }
 
     @Test
@@ -542,5 +561,71 @@ class ClimbStateBuilderTest {
         builder.build(rr, 10_050.0, ClimbInfo(50.0, 5.0, 550.0, 55.0, 60.0, null, null), trigger)
         builder.build(rr, 10_100.0, null, trigger)
         assertEquals(1, builder.completedClimbs.size) // same bucketed absolute span -> deduped
+    }
+
+    // --- Completed-climb stats: elapsed time, average power, saved profile ---
+
+    @Test
+    fun `topping out records the raw elapsed time from the per-frame clock`() {
+        val builder = ClimbStateBuilder()
+        // Snapshot at t=1_000_000 ms.
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger, nowMs = 1_000_000L)
+        builder.build(route, 1600.0, ClimbInfo(0.0, 0.0, 600.0, 60.0, 60.0, 1, 2), trigger, nowMs = 1_300_000L)
+        val s = shown(builder.build(route, 1700.0, null, trigger, nowMs = 1_450_000L)) // topout at t=1_450_000
+        assertEquals(1, s.completed.size)
+        assertEquals(450.0, s.completed[0].elapsedS!!, 1e-9) // (1_450_000 − 1_000_000) / 1000
+    }
+
+    @Test
+    fun `topping out records the average power over the on-climb frames`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger, power = 200.0)
+        builder.build(route, 1600.0, ClimbInfo(0.0, 0.0, 600.0, 60.0, 60.0, 1, 2), trigger, power = 300.0)
+        val s = shown(builder.build(route, 1700.0, null, trigger, power = 999.0)) // topout power irrelevant
+        assertEquals(1, s.completed.size)
+        assertEquals(250.0, s.completed[0].avgPower!!, 1e-9) // (200 + 300) / 2
+    }
+
+    @Test
+    fun `average power skips frames without a power sample`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger, power = 200.0)
+        builder.build(route, 1400.0, ClimbInfo(200.0, 20.0, 400.0, 40.0, 60.0, 1, 2), trigger, power = null) // skipped
+        builder.build(route, 1600.0, ClimbInfo(0.0, 0.0, 600.0, 60.0, 60.0, 1, 2), trigger, power = 300.0)
+        val s = shown(builder.build(route, 1700.0, null, trigger))
+        assertEquals(250.0, s.completed[0].avgPower!!, 1e-9) // averaged over the two non-null frames only
+    }
+
+    @Test
+    fun `topping out saves the route-cut profile relativized to the climb bottom`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        builder.build(route, 1600.0, ClimbInfo(0.0, 0.0, 600.0, 60.0, 60.0, 1, 2), trigger)
+        val s = shown(builder.build(route, 1700.0, null, trigger))
+        val saved = s.completed[0].profile!! // slice(1000, 1600) => [(1000,100),(1600,160)], relativized
+        assertEquals(0.0, saved.first().distance, 0.5)
+        assertEquals(600.0, saved.last().distance, 0.5)
+        assertEquals(100.0, saved.first().elevation, 0.5)
+        assertEquals(160.0, saved.last().elevation, 0.5)
+    }
+
+    @Test
+    fun `a route-less completion carries the live-traced profile relativized`() {
+        val builder = ClimbStateBuilder()
+        builder.build(null, 500.0, ClimbInfo(400.0, 40.0, 100.0, 10.0, 110.0, 1, 1), trigger)
+        builder.build(null, 700.0, ClimbInfo(200.0, 20.0, 300.0, 30.0, 130.0, 1, 1), trigger)
+        builder.build(null, 900.0, ClimbInfo(0.0, 0.0, 500.0, 50.0, 150.0, 1, 1), trigger)
+        assertEquals(ClimbUiState.Hidden, builder.build(null, 950.0, null, trigger)) // topout
+        val saved = builder.completedClimbs[0].profile!! // the composed trace, already 0-based
+        assertEquals(0.0, saved.first().distance, 0.5)
+    }
+
+    @Test
+    fun `without a clock or power the completion leaves elapsed and power null`() {
+        val builder = ClimbStateBuilder()
+        builder.build(route, 1200.0, ClimbInfo(400.0, 40.0, 200.0, 20.0, 60.0, 1, 2), trigger)
+        val s = shown(builder.build(route, 1700.0, null, trigger))
+        assertNull(s.completed[0].elapsedS) // climbStartMs stayed 0 (no nowMs passed)
+        assertNull(s.completed[0].avgPower) // no power sample ever counted
     }
 }

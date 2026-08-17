@@ -61,6 +61,25 @@ class ClimbStateBuilder {
     private var climbRidden = 0.0
     private var climbElevGained = 0.0
 
+    /** Ambient per-frame clock + power fed via build(); read by the snapshot/accumulation below. */
+    private var lastNowMs = 0L
+    private var lastPower: Double? = null
+
+    /** Wall-clock ms when the current climb was first snapshotted; 0 = not started. */
+    private var climbStartMs = 0L
+
+    /** Running power average over the current climb (all on-climb frames with a non-null power). */
+    private var powerSum = 0.0
+    private var powerCount = 0
+
+    /**
+     * The current routed climb's ABSOLUTE route-profile slice, captured once at snapshot
+     * ([RouteData.profile] sliced to the frozen span). Null for route-less climbs (their
+     * silhouette is the live trace) and for routed climbs with no elevation profile.
+     * recordFrozen() relativizes it by the climb's startDistance before persisting.
+     */
+    private var frozenRouteProfile: List<ElevationProfile.Point>? = null
+
     /**
      * Live trace of the ridden portion of the current wedge climb (no route elevation
      * profile): real (distance, elevation-from-bottom) samples in the active climb's
@@ -136,12 +155,23 @@ class ClimbStateBuilder {
         }
         val ridden = if (climbRidden > 0.0) climbRidden else climb.length
         val elevGained = if (climbRidden > 0.0) climbElevGained else climb.totalElevation
+        val elapsedS = if (climbStartMs > 0L) (lastNowMs - climbStartMs) / 1000.0 else null
+        val avgPower = if (powerCount > 0) powerSum / powerCount else null
+        // Climb-relative silhouette: routed = the absolute route slice, route-less = the composed
+        // trace (already starts at climb.startDistance). Relativize uniformly by startDistance so
+        // distance starts at ~0 regardless of source; require >=2 points else null.
+        val savedProfile = (frozenRouteProfile ?: composeTrace(climb)?.points)
+            ?.map { ElevationProfile.Point(it.distance - climb.startDistance, it.elevation) }
+            ?.takeIf { it.size >= 2 }
         completed.add(
             CompletedClimb(
                 length = ridden,
                 avgGrade = if (ridden > 0.0) elevGained / ridden * 100.0 else climb.avgGrade,
                 totalElevation = elevGained,
                 climbNumber = number,
+                elapsedS = elapsedS,
+                avgPower = avgPower,
+                profile = savedProfile,
             ),
         )
     }
@@ -162,6 +192,10 @@ class ClimbStateBuilder {
         frozenAbsStart = null
         climbRidden = 0.0
         climbElevGained = 0.0
+        climbStartMs = 0L
+        powerSum = 0.0
+        powerCount = 0
+        frozenRouteProfile = null
         clearTrace()
     }
 
@@ -197,7 +231,11 @@ class ClimbStateBuilder {
         progress: Double?,
         info: ClimbInfo?,
         triggerDistance: Double,
+        nowMs: Long = 0L,
+        power: Double? = null,
     ): ClimbUiState {
+        lastNowMs = nowMs
+        lastPower = power
         // No navigation: still surface a predicted climb straight from the CLIMB stream.
         if (route == null) {
             if (info == null) {
@@ -263,6 +301,9 @@ class ClimbStateBuilder {
                 profile = null,
                 active = approaching(route.copy(profile = null), ahead, moved, triggerDistance),
                 completed = completed.toList(),
+                // rebased frame: no reliable map to the route profile, so the view marks the
+                // upcoming-climb preview unavailable rather than drawing a misleading slice.
+                rerouting = true,
             )
         }
         clearRerouteAnchor() // on route or rejoined: forget the reroute anchor
@@ -325,6 +366,8 @@ class ClimbStateBuilder {
             // a straight number advance, only on a null-frame end)
             climbRidden = 0.0
             climbElevGained = 0.0
+            powerSum = 0.0
+            powerCount = 0
             clearTrace()
             val pos = progress ?: return null // need DTD once to anchor the snapshot
             val length = (distFromBottom ?: 0.0) + (distToTop ?: 0.0)
@@ -342,6 +385,9 @@ class ClimbStateBuilder {
             )
             frozenNumber = number
             frozenRouteless = false
+            climbStartMs = lastNowMs
+            // "cut out of route": the full planned climb span, ABSOLUTE (relativized at record time).
+            frozenRouteProfile = route.profile?.slice(climbStart, climbStart + length)
         }
         val climb = frozen!!
 
@@ -375,6 +421,7 @@ class ClimbStateBuilder {
                 (info.elevationFromBottom ?: (climb.totalElevation - active.elevationToTop))
                     .coerceAtLeast(0.0)
         }
+        lastPower?.let { powerSum += it; powerCount++ }
         return active to riderPos
     }
 
@@ -396,6 +443,8 @@ class ClimbStateBuilder {
             recordFrozen()
             climbRidden = 0.0
             climbElevGained = 0.0
+            powerSum = 0.0
+            powerCount = 0
             clearTrace()
             // Climb gain = gain done from the bottom + gain remaining to the top. Do NOT use
             // the stream's CLIMB_ELEVATION: it's the rider's current altitude, not the climb's
@@ -409,6 +458,8 @@ class ClimbStateBuilder {
             )
             frozenNumber = number
             frozenRouteless = true
+            climbStartMs = lastNowMs
+            frozenRouteProfile = null // route-less: the live trace is the silhouette
             // Absolute climb bottom from the route position, for completion dedup (the span
             // above is relative). Null with no progress (pure route-less) -> falls back to it.
             frozenAbsStart = progress?.let { (it - (distFromBottom ?: 0.0)).coerceAtLeast(0.0) }
@@ -443,6 +494,7 @@ class ClimbStateBuilder {
                 (info.elevationFromBottom ?: (climb.totalElevation - active.elevationToTop))
                     .coerceAtLeast(0.0)
         }
+        lastPower?.let { powerSum += it; powerCount++ }
         return active to riderPos
     }
 

@@ -54,7 +54,9 @@ Data flows one way: karoo-ext events → repos → pure state builder → overla
   `KarooSystemService` connection, wires everything, combines flows
   (route, distance-to-destination, climb stream, settings, ride state) at ~1 Hz and
   drives `OverlayController.show/hide`. Also reconciles `OnStreamState` consumers for
-  whichever system data fields are configured (`reconcileSysStreams`).
+  whichever system data fields are configured (`reconcileSysStreams`). Feeds the builder
+  `System.currentTimeMillis()` + the latest `POWER` sample (`PowerStreamRepo`, read via
+  `.value` — not a combine source) so completed climbs record raw time + average power.
 - **`data/`** — `NavigationRepo` normalizes `OnNavigationState` (route or destination
   navigation) into `RouteData`, and sets `RouteData.rerouting` when Karoo sends a
   `rejoinDistance` (active reroute). `ProgressRepo` streams `DISTANCE_TO_DESTINATION`;
@@ -64,14 +66,20 @@ Data flows one way: karoo-ext events → repos → pure state builder → overla
   the stream's climb is one aggregate span, distinct from and coarser than the nav `climbs`
   list, which is the "climbs ahead" set.) `ElevationProfile` decodes Karoo's elevation
   polyline — **pairs of (distance, elevation), Google polyline, precision 1 (factor 10)**,
-  unlike the route polyline (precision 5).
+  unlike the route polyline (precision 5); `Polyline.encode` at that same factor also
+  serializes each saved `CompletedClimb.profile`. `PowerStreamRepo` streams the native
+  `POWER` type into a `Double?` (watts; null off / no meter) on the same lifecycle as the
+  CLIMB/DTD streams.
   `ClimbStateBuilder` is the pure state machine fusing these into `ClimbUiState`:
   - **Detection = the CLIMB stream.** A non-null `ClimbInfo` means a climb has started; on
     that transition the builder snapshots the climb's route span **once** from
     `progress − distanceFromBottom` and freezes it (stable silhouette; no per-frame DTD
     trust), then places the rider from the stream's `distanceFromBottom`/`distanceToTop`.
     Upcoming climbs + the approach state come from the nav `climbs` list + `progress`
-    (trigger window). Topped climbs are recorded and persisted (`RideHistoryRepo`).
+    (trigger window). Topped climbs are recorded and persisted (`RideHistoryRepo`) — each
+    `CompletedClimb` also captures its **profile** (routed = the route slice; route-less =
+    the live-traced silhouette, both relativized to start ~0), **raw elapsed time** (from the
+    fed clock) and **average power** (mean of the fed on-climb samples).
   - **Route-less** (live CLIMB stream, no route): a "predicted" climb in climb-relative
     coords with a null profile → the view draws a constant-grade **wedge**.
   - **Reroute** (`RouteData.rerouting`): the nav `climbs` list is re-based to distances
@@ -94,9 +102,15 @@ Data flows one way: karoo-ext events → repos → pure state builder → overla
   or, when the state carries a null profile (route-less / reroute), a constant-grade
   **wedge** built from the climb's grade/length in `rebuildClimbCache` instead of a
   polyline slice — sliding next-500 m chunk strip, climbs list, 2×2 data-field grid.
+  In the FULL scrollable climbs list, tapping a row opens an **inline accordion** expander
+  beneath it (`selectedRow` + `rowHitRects`, drawn in `drawListPanel`; at most one open):
+  a completed row shows its saved profile (`drawProfilePreview`, a standalone renderer that
+  never touches the active-climb cache) + `TIME`/`AVG POWER`; an upcoming row shows its
+  profile cut live from the route. Tapping another row switches; nested BACK collapses the
+  expander before the panel.
   `ViewModeMachine` holds display mode (Base/Alt/Preview round-robin) and panel size;
-  gestures: tap = expand chip / cycle modes, swipe up/down = resize, drag scrolls the
-  full-screen list. Hardware buttons: the window is key-focusable except in CHIP;
+  gestures: tap = expand chip / cycle modes / open a list row's detail, swipe up/down =
+  resize, drag scrolls the full-screen list. Hardware buttons: the window is key-focusable except in CHIP;
   bottom-left (KEYCODE_BACK) = shrink one step. The other three (page nav) can't be
   handed to Karoo while the overlay holds focus — replaying the press via
   `PerformHardwareAction` just loops the injected key back into the focused overlay.

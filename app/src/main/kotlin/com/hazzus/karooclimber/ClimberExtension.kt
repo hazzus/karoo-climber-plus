@@ -6,6 +6,7 @@ import com.hazzus.karooclimber.data.ClimbStateBuilder
 import com.hazzus.karooclimber.data.ClimbStreamRepo
 import com.hazzus.karooclimber.data.ClimbUiState
 import com.hazzus.karooclimber.data.NavigationRepo
+import com.hazzus.karooclimber.data.PowerStreamRepo
 import com.hazzus.karooclimber.data.ProgressRepo
 import com.hazzus.karooclimber.data.RideHistoryRepo
 import com.hazzus.karooclimber.data.progressAlongRoute
@@ -41,6 +42,7 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
     private lateinit var navigationRepo: NavigationRepo
     private lateinit var progressRepo: ProgressRepo
     private lateinit var climbStreamRepo: ClimbStreamRepo
+    private lateinit var powerStreamRepo: PowerStreamRepo
     private lateinit var settingsRepo: SettingsRepo
     private lateinit var rideHistoryRepo: RideHistoryRepo
     private lateinit var overlay: OverlayController
@@ -63,6 +65,7 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         navigationRepo = NavigationRepo(karooSystem)
         progressRepo = ProgressRepo(karooSystem)
         climbStreamRepo = ClimbStreamRepo(karooSystem)
+        powerStreamRepo = PowerStreamRepo(karooSystem)
         settingsRepo = SettingsRepo(applicationContext)
         rideHistoryRepo = RideHistoryRepo(applicationContext)
         overlay = OverlayController(this)
@@ -107,9 +110,11 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
                     if (needed) {
                         progressRepo.start()
                         climbStreamRepo.start()
+                        powerStreamRepo.start()
                     } else {
                         progressRepo.stop()
                         climbStreamRepo.stop()
+                        powerStreamRepo.stop()
                     }
                 }
         }
@@ -165,7 +170,11 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
     ): Pair<ClimbUiState, Settings> {
         if (!settings.overlayEnabled || !riding) return ClimbUiState.Hidden to settings
         val progress = progressAlongRoute(route, dtd)
-        return builder.build(route, progress, info, settings.triggerDistanceM) to settings
+        return builder.build(
+            route, progress, info, settings.triggerDistanceM,
+            nowMs = System.currentTimeMillis(),
+            power = powerStreamRepo.power.value,
+        ) to settings
     }
 
     /** Start/stop OnStreamState consumers to match the configured field set. */
@@ -195,6 +204,7 @@ class ClimberExtension : KarooExtension("karoo-climber", BuildConfig.VERSION_NAM
         navigationRepo.stop()
         progressRepo.stop()
         climbStreamRepo.stop()
+        powerStreamRepo.stop()
         scope.cancel()
         karooSystem.disconnect()
         super.onDestroy()
