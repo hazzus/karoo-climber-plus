@@ -16,8 +16,8 @@ import android.view.MotionEvent
 import android.view.View
 import com.hazzus.karooclimber.R
 import com.hazzus.karooclimber.data.ClimbData
-import com.hazzus.karooclimber.data.ClimbEntry
 import com.hazzus.karooclimber.data.ClimbUiState
+import com.hazzus.karooclimber.data.CompletedClimb
 import com.hazzus.karooclimber.data.ElevationProfile
 import com.hazzus.karooclimber.overlay.ViewModeMachine.PanelSize
 import com.hazzus.karooclimber.palette.GradePalette
@@ -42,8 +42,9 @@ import kotlin.math.roundToInt
  *
  * Gestures: tap = expand chip / cycle modes; swipe away from the anchored edge = grow,
  * toward it = shrink (up/down for a bottom drawer, down/up for a top one);
- * vertical drag scrolls the full list. Hardware: the bottom-left button shrinks
- * like the hide swipe (drawer/full only — the chip window never takes key focus).
+ * vertical drag scrolls the full list. Hardware buttons (drawer/full only — the chip
+ * window never takes key focus): bottom-left shrinks like the hide swipe; the other
+ * three are passed through to Karoo (page nav etc.) — see [dispatchKeyEvent].
  */
 @SuppressLint("ViewConstructor")
 class ClimbOverlayView(context: Context) : View(context) {
@@ -58,6 +59,16 @@ class ClimbOverlayView(context: Context) : View(context) {
     private var listScrollPx = 0f
     private var sysValues: Map<String, Map<String, Double>> = emptyMap()
 
+    /** Which full-list row (if any) is expanded to its inline detail; null = none. */
+    private sealed interface RowSel {
+        data class Done(val climb: CompletedClimb) : RowSel
+        data class Ahead(val startDistance: Double) : RowSel
+    }
+    private var selectedRow: RowSel? = null
+
+    /** Hit rects for the visible FULL-list rows, rebuilt each scrollable draw (screen coords). */
+    private val rowHitRects = mutableListOf<Pair<RectF, RowSel>>()
+
     /** Momentary banner naming the view mode, shown right after a tap-cycle switch. */
     private var modeFlashText = ""
     private var modeFlashUntil = 0L
@@ -65,8 +76,17 @@ class ClimbOverlayView(context: Context) : View(context) {
     /** Controller hook: window size must change. */
     var onRelayoutNeeded: (() -> Unit)? = null
 
-    /** Controller hook: physical hardware key the overlay doesn't use itself. */
+    /** Controller hook: replay a hardware key to Karoo the overlay doesn't use itself. */
     var onHardwareKeyPassthrough: ((Int) -> Unit)? = null
+
+    /** Controller hook: make the overlay window key-focusable (true) or not (false). */
+    var onSetFocusable: ((Boolean) -> Unit)? = null
+
+    /** Hardware key to replay to Karoo once focus has actually left us; see [dispatchKeyEvent]. */
+    private var pendingHardwareAction: Int? = null
+
+    /** Re-takes key focus after a pass-through; a field so overlapping presses don't stack it. */
+    private val refocusRunnable = Runnable { onSetFocusable?.invoke(true) }
 
     val panelSize: PanelSize get() = machine.size
 
@@ -83,7 +103,15 @@ class ClimbOverlayView(context: Context) : View(context) {
                     PanelSize.CHIP -> resize { machine.expand() }
                     PanelSize.EXPANDED ->
                         if (s.active != null) cycleMode(s) else resize { machine.expand() }
-                    PanelSize.FULL -> if (s.active != null) cycleMode(s)
+                    PanelSize.FULL ->
+                        if (s.active != null) {
+                            cycleMode(s)
+                        } else {
+                            // list shown: hit-test the visible rows; tap toggles the
+                            // inline expander (same row collapses, a new row switches)
+                            val hit = rowHitRects.firstOrNull { it.first.contains(e.x, e.y) }?.second
+                            if (hit != null) selectedRow = if (selectedRow == hit) null else hit
+                        }
                 }
                 invalidate()
                 return true
@@ -149,31 +177,60 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     // Key events only arrive while the window is focusable (drawer/full — never CHIP,
     // so the chip leaves all hardware buttons to Karoo). Bottom-left (BACK) shrinks
-    // like the hide swipe; the other buttons are handed back to Karoo OS via
-    // PerformHardwareAction so paging etc. keep working behind the panel.
+    // like the hide swipe; the other three (page nav) reach Karoo through a brief
+    // focus hand-off, since a focused overlay would otherwise swallow them: replaying
+    // the press while we hold focus just loops the injected key back to us. So we drop
+    // focus, replay it once RideActivity is focused (onWindowFocusChanged), then re-take
+    // focus after a short delay so the injected key lands first and BACK keeps working.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (machine.size == PanelSize.CHIP) return super.dispatchKeyEvent(event)
         when (event.keyCode) {
             KeyEvent.KEYCODE_BACK -> {
                 if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) {
-                    resize { machine.collapse() }
+                    // nested: an open inline expander collapses first; only a second
+                    // BACK (or BACK with no expander open) shrinks the panel a step
+                    if (selectedRow != null && machine.size == PanelSize.FULL && state?.active == null) {
+                        selectedRow = null
+                        invalidate()
+                    } else {
+                        resize { machine.collapse() }
+                    }
                 }
             }
             KeyEvent.KEYCODE_NAVIGATE_PREVIOUS,
             KeyEvent.KEYCODE_NAVIGATE_NEXT,
             KeyEvent.KEYCODE_NAVIGATE_IN,
             -> {
-                // physical presses only: PerformHardwareAction may inject a virtual
-                // copy back at this focused window, which must not be re-forwarded
+                // physical presses only: our replayed press re-enters here as a virtual
+                // key, which must not kick off another hand-off
                 if (event.action == KeyEvent.ACTION_UP &&
                     event.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD
                 ) {
-                    onHardwareKeyPassthrough?.invoke(event.keyCode)
+                    pendingHardwareAction = event.keyCode
+                    onSetFocusable?.invoke(false)
                 }
             }
             else -> return super.dispatchKeyEvent(event)
         }
         return true
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        val action = pendingHardwareAction
+        if (!hasWindowFocus && action != null) {
+            pendingHardwareAction = null
+            onHardwareKeyPassthrough?.invoke(action)
+            // delay re-taking focus so Karoo's injected key lands while RideActivity
+            // is still focused, instead of looping back to us
+            removeCallbacks(refocusRunnable)
+            postDelayed(refocusRunnable, REFOCUS_DELAY_MS)
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(refocusRunnable)
+        super.onDetachedFromWindow()
     }
 
     private fun cycleMode(s: ClimbUiState.Shown) {
@@ -202,6 +259,7 @@ class ClimbOverlayView(context: Context) : View(context) {
     private inline fun resize(change: () -> Unit) {
         change()
         listScrollPx = 0f
+        selectedRow = null // any panel-size change collapses the inline expander
         onRelayoutNeeded?.invoke()
         invalidate()
     }
@@ -214,6 +272,8 @@ class ClimbOverlayView(context: Context) : View(context) {
         isImperial: Boolean = imperial,
         newSysValues: Map<String, Map<String, Double>> = sysValues,
     ) {
+        // read the previous trace before `state` is reassigned below
+        val prevTraced = state?.tracedProfile
         val newKey = newState.active?.climb?.let { it.startDistance to it.endDistance }
         if (newKey != activeKey) {
             if (newKey != null) machine.onNewClimb(newSettings.autoExpand) else machine.onClimbEnded()
@@ -221,9 +281,15 @@ class ClimbOverlayView(context: Context) : View(context) {
             if (newKey != null) rebuildClimbCache(newState)
             listScrollPx = 0f
             onRelayoutNeeded?.invoke()
+        } else if (newKey != null && newState.tracedProfile !== prevTraced) {
+            // same climb, but the wedge trace grew (Step A appends a new instance ~per
+            // 10 m of ascent): refresh the silhouette + colors, no key-change side effects
+            rebuildClimbCache(newState)
         }
         newState.active?.let { machine.onProgress(it.distanceToTop) }
         state = newState
+        // the scrollable list (and its expander) isn't shown while a climb is active
+        if (newState.active != null) selectedRow = null
         settings = newSettings
         palette = GradePalettes.byId(newSettings.paletteId)
         imperial = isImperial
@@ -252,21 +318,20 @@ class ClimbOverlayView(context: Context) : View(context) {
                 active != null && active.distanceToStart <= 0 ->
                     listOf(currentGrade(s), formatValue(active.distanceToTop))
                 active != null -> listOf(formatValue(active.distanceToStart))
-                else -> listOf(s.completedCount, s.totalCount)
+                else -> listOf(s.completed.size, s.climbs.size)
             }
             else -> listOf(
                 // list panel: header counter + NEXT IN + per-row status text;
                 // lengths/grades come from the (compared) climbs list itself
-                s.completedCount,
                 s.climbs,
+                s.completed,
                 s.upcoming.firstOrNull()?.let { formatValue(it.startDistance - s.progress) },
                 listScrollPx,
-                s.climbs.map { entry ->
-                    when {
-                        entry.done -> "done"
-                        s.progress >= entry.climb.startDistance -> "now"
-                        else -> formatKm(entry.climb.startDistance - s.progress)
-                    }
+                selectedRow, // repaint when only the inline expander selection differs
+                s.rerouting, // reroute toggles the preview's availability message
+                s.climbs.map { climb ->
+                    if (s.progress >= climb.startDistance) "now"
+                    else formatKm(climb.startDistance - s.progress)
                 },
             )
         }
@@ -283,7 +348,9 @@ class ClimbOverlayView(context: Context) : View(context) {
 
     private fun rebuildClimbCache(s: ClimbUiState.Shown) {
         val climb = s.active?.climb ?: return
-        val profile = s.profile
+        // prefer the live-traced real silhouette of the ridden portion (wedge climbs);
+        // it shares the active climb's coordinate frame, so the domain/min-max below hold
+        val profile = s.tracedProfile ?: s.profile
         if (profile != null) {
             cachePoints = profile.slice(climb.startDistance, climb.endDistance)
             cacheSegments =
@@ -356,10 +423,12 @@ class ClimbOverlayView(context: Context) : View(context) {
     // Hammerhead glyphs replacing the → / ↗ text arrows (white fill baked in)
     private val distToIcon: Drawable? = context.getDrawable(R.drawable.ic_dist_to)
     private val elevGainIcon: Drawable? = context.getDrawable(R.drawable.ic_elev_gain)
-    private val doneIcon: Drawable? = context.getDrawable(R.drawable.ic_done)
     // mountain glyph tinted to match the white chip text (split-chip idle label)
     private val climbIcon: Drawable? =
         context.getDrawable(R.drawable.ic_climber)?.apply { setTint(Color.WHITE) }
+    // "done" check for completed climb rows, tinted to the dimmed row text tone
+    private val doneIcon: Drawable? =
+        context.getDrawable(R.drawable.ic_done)?.apply { setTint(COMPLETED_ROW_TEXT_COLOR) }
     private val splitChipPath = Path()
 
     /**
@@ -407,7 +476,8 @@ class ClimbOverlayView(context: Context) : View(context) {
                 grade = currentGrade(s)?.let { "%.0f%%".format(it) } ?: "--%",
                 dist = formatValue(active.distanceToTop),
             )
-            active == null -> ChipContent.Single("CLIMBS ${s.completedCount}/${s.totalCount}")
+            active == null ->
+                ChipContent.Single("CLIMBS ${s.completed.size}/${s.completed.size + s.climbs.size}")
             else -> ChipContent.Single("IN ${formatValue(active.distanceToStart)}")
         }
     }
@@ -482,14 +552,18 @@ class ClimbOverlayView(context: Context) : View(context) {
         chipTextPaint.textAlign = Paint.Align.LEFT
         when {
             active == null -> {
-                // small climb icon + completed/total, kept clear of the tab edge;
-                // drop the icon past 9 climbs so the wider count still fits
+                // small climb icon + done/total fraction, kept clear of the tab edge;
+                // drop the icon when icon+text would overflow the tab so the text still fits
+                val label = "${s.completed.size}/${s.completed.size + s.climbs.size}"
+                val iconH = chipTextPaint.textSize * 0.55f
+                val iconGap = chipTextPaint.textSize * 0.25f
+                val textW = chipTextPaint.measureText(label)
+                val withIconW = iconWidth(climbIcon, iconH) + iconGap + textW
                 var x = pad
-                if (s.totalCount <= 9) {
-                    val iconH = chipTextPaint.textSize * 0.55f
-                    x += drawIcon(canvas, climbIcon, x, baseline, iconH) + chipTextPaint.textSize * 0.25f
+                if (pad + withIconW <= chipW - pad) {
+                    x += drawIcon(canvas, climbIcon, x, baseline, iconH) + iconGap
                 }
-                canvas.drawText("${s.completedCount}/${s.totalCount}", x, baseline, chipTextPaint)
+                canvas.drawText(label, x, baseline, chipTextPaint)
             }
             active.distanceToStart > 0 -> canvas.drawText("IN", pad, baseline, chipTextPaint)
             else -> {
@@ -618,6 +692,14 @@ class ClimbOverlayView(context: Context) : View(context) {
     ): List<ElevationProfile.Segment> {
         val climb = active.climb
         val profile = s.profile
+        // Wedge (no real profile ahead): the best estimate of the slope ahead is the actual
+        // average grade of the climb still remaining (elevationToTop / distanceToTop), which
+        // tracks reality as the rider climbs — not the frozen whole-climb avgGrade.
+        val wedgeGrade = if (active.distanceToStart <= 0.0 && active.distanceToTop > 1.0) {
+            active.elevationToTop / active.distanceToTop * 100.0
+        } else {
+            climb.avgGrade
+        }
         val result = ArrayList<ElevationProfile.Segment>(CHUNK_STRIP_CELLS)
         var start = s.progress.coerceAtLeast(climb.startDistance)
         while (result.size < CHUNK_STRIP_CELLS) {
@@ -626,7 +708,7 @@ class ClimbOverlayView(context: Context) : View(context) {
             val grade = if (profile != null) {
                 (profile.elevationAt(end) - profile.elevationAt(start)) / (end - start) * 100.0
             } else {
-                climb.avgGrade
+                wedgeGrade
             }
             result.add(ElevationProfile.Segment(start, end, grade))
             start = end
@@ -894,7 +976,7 @@ class ClimbOverlayView(context: Context) : View(context) {
     ): String = when (field) {
         ClimbField.DIST_TO_TOP -> formatValue(active.distanceToTop)
         ClimbField.ELEV_TO_TOP -> formatElevationValue(active.elevationToTop)
-        ClimbField.CLIMB -> "${active.index + 1}/${s.totalCount}"
+        ClimbField.CLIMB -> "${active.index + 1}/${active.total ?: s.climbs.size}"
         ClimbField.GRADE -> currentGrade(s)?.let { "%.1f".format(it) } ?: "--"
         ClimbField.AVG_GRADE -> "%.1f".format(active.climb.avgGrade)
         ClimbField.LENGTH -> formatValue(active.climb.length)
@@ -976,7 +1058,12 @@ class ClimbOverlayView(context: Context) : View(context) {
         val baseline = big * 1.05f
         textPaint.textSize = big
         textPaint.textAlign = Paint.Align.LEFT
-        canvas.drawText("CLIMBS ${s.completedCount}/${s.totalCount}", pad, baseline, textPaint)
+        canvas.drawText(
+            "CLIMBS ${s.completed.size}/${s.completed.size + s.climbs.size}",
+            pad,
+            baseline,
+            textPaint,
+        )
         s.upcoming.firstOrNull()?.let { next ->
             textPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText(
@@ -987,12 +1074,12 @@ class ClimbOverlayView(context: Context) : View(context) {
             )
         }
 
-        val rows = if (scrollable) {
-            s.climbs
-        } else {
-            s.upcoming.take(limit).map { ClimbEntry(it, done = false) }
-        }
-        if (rows.isEmpty()) {
+        // FULL list: completed climbs (dimmed "done" rows) first, then the climbs
+        // ahead. The compact drawer stays upcoming-only.
+        val completedRows = if (scrollable) s.completed else emptyList()
+        val aheadRows = if (scrollable) s.climbs else s.upcoming.take(limit)
+        val rowCount = completedRows.size + aheadRows.size
+        if (rowCount == 0) {
             subTextPaint.textSize = headerH * 0.45f
             subTextPaint.textAlign = Paint.Align.CENTER
             canvas.drawText("NO CLIMBS AHEAD", width / 2f, height / 2f, subTextPaint)
@@ -1003,27 +1090,76 @@ class ClimbOverlayView(context: Context) : View(context) {
         val gap = height * 0.012f
         val rowH = if (scrollable) height * 0.105f else (height - listTop - pad - 2 * gap) / 3f
 
+        // FULL only: an inline detail panel drops beneath the tapped row (accordion),
+        // pushing the rows below it down. EXPANDED stays a plain non-scrollable list.
+        val expH = height * 0.42f
+        if (scrollable) {
+            rowHitRects.clear()
+            // is the selected row actually present this frame? only then does its
+            // expander occupy space / factor into the scroll clamp
+            val expandedVisible = when (val sel = selectedRow) {
+                is RowSel.Done -> completedRows.contains(sel.climb)
+                is RowSel.Ahead -> aheadRows.any { it.startDistance == sel.startDistance }
+                null -> false
+            }
+            // total content height BEFORE drawing, so maxListScroll() clamps correctly
+            // even when the selected row (and its expander) sit below the fold
+            var contentH = rowCount * (rowH + gap) - gap
+            if (expandedVisible) contentH += expH + gap
+            lastRowsHeight = contentH
+            lastListAreaHeight = height - pad - listTop
+            listScrollPx = listScrollPx.coerceIn(0f, maxListScroll())
+        }
+
         canvas.save()
         canvas.clipRect(0f, listTop, width.toFloat(), height - pad)
         val rowPad = width * 0.045f
         var y = listTop - if (scrollable) listScrollPx else 0f
-        for (entry in rows) {
+        // at most one expander (contentH above budgets exactly one) — guards the
+        // degenerate case of two value-equal rows both matching selectedRow
+        var expanderDrawn = false
+        for (climb in completedRows) {
+            val rect = RectF(rowPad, y, width - rowPad, y + rowH)
             if (y + rowH > listTop && y < height) {
-                drawClimbRow(canvas, s, entry, RectF(rowPad, y, width - rowPad, y + rowH))
+                drawCompletedRow(canvas, climb, rect)
+                if (scrollable) rowHitRects += RectF(rect) to RowSel.Done(climb)
             }
             y += rowH + gap
+            // inline expander beneath the selected completed row; advance y even when
+            // it's off-screen so the scroll accounting above stays correct
+            if (scrollable && !expanderDrawn && (selectedRow as? RowSel.Done)?.climb == climb) {
+                val er = RectF(rowPad, y, width - rowPad, y + expH)
+                if (y + expH > listTop && y < height) drawCompletedExpander(canvas, climb, er)
+                y += expH + gap
+                expanderDrawn = true
+            }
+        }
+        for (climb in aheadRows) {
+            val rect = RectF(rowPad, y, width - rowPad, y + rowH)
+            if (y + rowH > listTop && y < height) {
+                drawClimbRow(canvas, s, climb, rect)
+                if (scrollable) rowHitRects += RectF(rect) to RowSel.Ahead(climb.startDistance)
+            }
+            y += rowH + gap
+            if (scrollable && !expanderDrawn && (selectedRow as? RowSel.Ahead)?.startDistance == climb.startDistance) {
+                val er = RectF(rowPad, y, width - rowPad, y + expH)
+                if (y + expH > listTop && y < height) drawAheadExpander(canvas, s, climb, er)
+                y += expH + gap
+                expanderDrawn = true
+            }
         }
         canvas.restore()
 
-        lastRowsHeight = rows.size * (rowH + gap) - gap
-        lastListAreaHeight = height - pad - listTop
+        // scrollable set lastRowsHeight (incl. the expander) before the loop; the
+        // non-scrollable drawer keeps its original post-loop bookkeeping unchanged
+        if (!scrollable) {
+            lastRowsHeight = rowCount * (rowH + gap) - gap
+            lastListAreaHeight = height - pad - listTop
+        }
     }
 
-    private fun drawClimbRow(canvas: Canvas, s: ClimbUiState.Shown, entry: ClimbEntry, rect: RectF) {
-        val climb = entry.climb
-        // done climbs may carry pre-reroute distances — never compare them to progress
-        val done = entry.done
-        rowPaint.color = if (done) 0xFF4A4A4A.toInt() else palette.colorFor(climb.avgGrade)
+    private fun drawClimbRow(canvas: Canvas, s: ClimbUiState.Shown, climb: ClimbData, rect: RectF) {
+        rowPaint.color = palette.colorFor(climb.avgGrade)
         canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, rowPaint)
 
         rowTextPaint.textSize = rect.height() * 0.55f
@@ -1031,19 +1167,12 @@ class ClimbOverlayView(context: Context) : View(context) {
         val cy = rect.centerY() - (rowTextPaint.ascent() + rowTextPaint.descent()) / 2f
         val colW = rect.width() / 3f
         // unitless: to-start always in km (0.7), length in km, grade in %
-        if (done) {
-            // bottom-aligned with the row text baseline, like the header icons
-            val iconH = rect.height() * 0.42f
-            val iconW = iconWidth(doneIcon, iconH)
-            drawIcon(canvas, doneIcon, rect.left + colW * 0.5f - iconW / 2f, cy, iconH)
+        val toStart = if (s.progress >= climb.startDistance) {
+            "now"
         } else {
-            val toStart = if (s.progress >= climb.startDistance) {
-                "now"
-            } else {
-                formatKm(climb.startDistance - s.progress)
-            }
-            canvas.drawText(toStart, rect.left + colW * 0.5f, cy, rowTextPaint)
+            formatKm(climb.startDistance - s.progress)
         }
+        canvas.drawText(toStart, rect.left + colW * 0.5f, cy, rowTextPaint)
         canvas.drawText(formatKm(climb.length), rect.left + colW * 1.5f, cy, rowTextPaint)
         canvas.drawText("%.1f".format(climb.avgGrade), rect.left + colW * 2.5f, cy, rowTextPaint)
 
@@ -1051,6 +1180,139 @@ class ClimbOverlayView(context: Context) : View(context) {
         val inset = rect.height() * 0.2f
         canvas.drawLine(rect.left + colW, rect.top + inset, rect.left + colW, rect.bottom - inset, splicePaint)
         canvas.drawLine(rect.left + 2 * colW, rect.top + inset, rect.left + 2 * colW, rect.bottom - inset, splicePaint)
+    }
+
+    /** A finished climb: same layout as [drawClimbRow] but dimmed, with a done glyph. */
+    private fun drawCompletedRow(canvas: Canvas, climb: CompletedClimb, rect: RectF) {
+        rowPaint.color = COMPLETED_ROW_BG_COLOR
+        canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, rowPaint)
+
+        rowTextPaint.textSize = rect.height() * 0.55f
+        rowTextPaint.textAlign = Paint.Align.CENTER
+        val prevColor = rowTextPaint.color
+        rowTextPaint.color = COMPLETED_ROW_TEXT_COLOR
+        val cy = rect.centerY() - (rowTextPaint.ascent() + rowTextPaint.descent()) / 2f
+        val colW = rect.width() / 3f
+        // col 0: done glyph (replaces the "to-start"/"now" column), centered
+        val iconH = rect.height() * 0.5f
+        val iconW = iconWidth(doneIcon, iconH)
+        drawIcon(canvas, doneIcon, rect.left + colW * 0.5f - iconW / 2f, rect.centerY() + iconH / 2f, iconH)
+        // col 1: length (unitless km), col 2: avg grade
+        canvas.drawText(formatKm(climb.length), rect.left + colW * 1.5f, cy, rowTextPaint)
+        canvas.drawText("%.1f".format(climb.avgGrade), rect.left + colW * 2.5f, cy, rowTextPaint)
+        rowTextPaint.color = prevColor
+
+        // column splices
+        val inset = rect.height() * 0.2f
+        canvas.drawLine(rect.left + colW, rect.top + inset, rect.left + colW, rect.bottom - inset, splicePaint)
+        canvas.drawLine(rect.left + 2 * colW, rect.top + inset, rect.left + 2 * colW, rect.bottom - inset, splicePaint)
+    }
+
+    /** Completed-climb detail: saved profile on top, then TIME + AVG POWER rows. */
+    private fun drawCompletedExpander(canvas: Canvas, climb: CompletedClimb, rect: RectF) {
+        canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, cellPaint)
+        val inset = rect.width() * 0.03f
+        val chartH = rect.height() * 0.55f
+        val chart = RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.top + chartH)
+        val pts = climb.profile ?: wedgePoints(climb.length, climb.totalElevation ?: climb.length * climb.avgGrade / 100.0)
+        drawProfilePreview(canvas, pts, chart)
+
+        val statsTop = rect.top + chartH + inset
+        val rowH2 = (rect.bottom - statsTop - inset) / 2f
+        val statLeft = rect.left + inset * 2
+        val statRight = rect.right - inset * 2
+        drawStatRow(canvas, "TIME", climb.elapsedS?.let { formatDuration(it) } ?: "—",
+            RectF(statLeft, statsTop, statRight, statsTop + rowH2))
+        drawStatRow(canvas, "AVG POWER", climb.avgPower?.let { "${it.roundToInt()} W" } ?: "—",
+            RectF(statLeft, statsTop + rowH2, statRight, rect.bottom - inset))
+    }
+
+    /** Upcoming-climb detail: its elevation profile cut live from the route (wedge fallback). */
+    private fun drawAheadExpander(canvas: Canvas, s: ClimbUiState.Shown, climb: ClimbData, rect: RectF) {
+        canvas.drawRoundRect(rect, CELL_CORNER, CELL_CORNER, cellPaint)
+        val inset = rect.width() * 0.03f
+        val chart = RectF(rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset)
+        if (s.rerouting) {
+            // rebased reroute frame doesn't map to the route profile — say so instead of
+            // drawing a misleading slice; the real preview resumes once back on route
+            drawPreviewUnavailable(canvas, chart)
+            return
+        }
+        val pts = s.profile?.slice(climb.startDistance, climb.endDistance)
+            ?.map { ElevationProfile.Point(it.distance - climb.startDistance, it.elevation) }
+            ?.takeIf { it.size >= 2 }
+            ?: wedgePoints(climb.length, climb.totalElevation)
+        drawProfilePreview(canvas, pts, chart)
+    }
+
+    /** Two centered lines telling the rider the preview can't be drawn during a reroute. */
+    private fun drawPreviewUnavailable(canvas: Canvas, chart: RectF) {
+        subTextPaint.textAlign = Paint.Align.CENTER
+        subTextPaint.textSize = chart.height() * 0.18f
+        val longest = "PREVIEW UNAVAILABLE"
+        val maxW = chart.width() * 0.9f
+        val w = subTextPaint.measureText(longest)
+        if (w > maxW) subTextPaint.textSize *= maxW / w
+        val t = subTextPaint.textSize
+        canvas.drawText(longest, chart.centerX(), chart.centerY() - t * 0.15f, subTextPaint)
+        canvas.drawText("DURING REROUTE", chart.centerX(), chart.centerY() + t * 1.05f, subTextPaint)
+    }
+
+    private fun wedgePoints(length: Double, totalElevation: Double) = listOf(
+        ElevationProfile.Point(0.0, 0.0),
+        ElevationProfile.Point(length, totalElevation),
+    )
+
+    /** A label:value row (label left, value right), reusing the panel text paints. */
+    private fun drawStatRow(canvas: Canvas, label: String, value: String, r: RectF) {
+        subTextPaint.textAlign = Paint.Align.LEFT
+        subTextPaint.textSize = r.height() * 0.5f
+        canvas.drawText(label, r.left, r.centerY() - (subTextPaint.ascent() + subTextPaint.descent()) / 2f, subTextPaint)
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = r.height() * 0.55f
+        canvas.drawText(value, r.right, r.centerY() - (textPaint.ascent() + textPaint.descent()) / 2f, textPaint)
+    }
+
+    /**
+     * Standalone climb-profile silhouette for the accordion preview: self-contained (its own
+     * min/max + local Path), so it never touches the active-climb cache (cachePoints/profilePath).
+     * Colors per ~100 m grade chunk like drawProfile; no rider marker / past-shade / strip.
+     */
+    private fun drawProfilePreview(canvas: Canvas, points: List<ElevationProfile.Point>, chart: RectF) {
+        if (points.size < 2) return
+        val d0 = points.first().distance
+        val d1 = points.last().distance
+        if (d1 <= d0) return
+        val minE = points.minOf { it.elevation }
+        val spanE = (points.maxOf { it.elevation } - minE).coerceAtLeast(10.0)
+        val xScale = chart.width() / (d1 - d0)
+        fun xOf(d: Double) = chart.left + ((d - d0) * xScale).toFloat()
+        fun yOf(e: Double) = chart.bottom - ((e - minE) / spanE * chart.height() * PROFILE_MAX_FRACTION).toFloat()
+
+        val path = Path()
+        path.moveTo(xOf(d0), chart.bottom)
+        for (p in points) path.lineTo(xOf(p.distance), yOf(p.elevation))
+        path.lineTo(xOf(d1), chart.bottom)
+        path.close()
+
+        val segs = ElevationProfile.fromPoints(points)?.segments(d0, d1, GRADE_CHUNK_METERS) ?: emptyList()
+        canvas.save()
+        canvas.clipRect(chart)
+        canvas.clipPath(path)
+        if (segs.isEmpty()) {
+            fillPaint.color = palette.colorFor(0.0)
+            canvas.drawRect(chart, fillPaint)
+        } else {
+            for (seg in segs) {
+                fillPaint.color = if (seg.grade < 0 && palette.bands.last().first >= 0.0) {
+                    GradePalettes.descentColor
+                } else {
+                    palette.colorFor(seg.grade)
+                }
+                canvas.drawRect(xOf(seg.start), chart.top, xOf(seg.end), chart.bottom, fillPaint)
+            }
+        }
+        canvas.restore()
     }
 
     private var lastRowsHeight = 0f
@@ -1079,7 +1341,7 @@ class ClimbOverlayView(context: Context) : View(context) {
     }
 
     private fun elevationAtProgress(s: ClimbUiState.Shown, active: ClimbUiState.ActiveClimb): Double =
-        s.profile?.elevationAt(s.progress)
+        (s.tracedProfile ?: s.profile)?.elevationAt(s.progress)
             ?: (active.climb.totalElevation *
                 ((s.progress - active.climb.startDistance) / active.climb.length).coerceIn(0.0, 1.0))
 
@@ -1120,6 +1382,13 @@ class ClimbOverlayView(context: Context) : View(context) {
         "%.1f".format(if (imperial) meters / 1609.344 else meters / 1000.0)
 
     companion object {
+        /**
+         * How long the drawer stays non-focusable after replaying a hardware press,
+         * so Karoo's injected key reaches the ride app before we re-take focus for the
+         * bottom-left collapse. Tuned above the observed PerformHardwareAction latency.
+         */
+        private const val REFOCUS_DELAY_MS = 250L
+
         /** Chip text size and side padding, both as a fraction of chip height. */
         private const val CHIP_TEXT_FRACTION = 0.75f
         private const val CHIP_SIDE_PADDING_FRACTION = 0.5f
@@ -1135,6 +1404,10 @@ class ClimbOverlayView(context: Context) : View(context) {
         private const val GRADE_CHUNK_METERS = 100.0
 
         private const val CELL_CORNER = 8f
+
+        /** Dimmed styling for finished-climb rows in the full scrollable list. */
+        private const val COMPLETED_ROW_BG_COLOR = 0xFF2A2A2C.toInt()
+        private const val COMPLETED_ROW_TEXT_COLOR = 0xFF8A8A8E.toInt()
 
         /** Cells in the upcoming-chunks strip (5 x 100 m = 500 m lookahead). */
         private const val CHUNK_STRIP_CELLS = 5

@@ -244,12 +244,6 @@ private fun SettingsScreen(
             }
         }
 
-        // ---- Debug ----
-        SectionTitle("Debug")
-        SwitchRow("Demo mode (fake climb, no ride needed)", settings.demoMode) { on ->
-            update { it.copy(demoMode = on) }
-        }
-
         HorizontalDivider()
         Text(
             "Palettes adapted from Barberfish (Apache-2.0). " +

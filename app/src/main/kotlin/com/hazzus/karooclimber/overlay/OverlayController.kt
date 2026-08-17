@@ -39,6 +39,12 @@ class OverlayController(private val service: ClimberExtension) {
     private var appliedParams: WindowManager.LayoutParams? = null
     private var lastHasActive = false
 
+    /**
+     * When true the window is non-focusable regardless of panel size, so a replayed
+     * hardware press reaches Karoo instead of this overlay; see [applyFocusable].
+     */
+    private var forcedNonFocusable = false
+
     val isShowing: Boolean get() = view != null
 
     /**
@@ -78,6 +84,7 @@ class OverlayController(private val service: ClimberExtension) {
             created.onHardwareKeyPassthrough = { keyCode ->
                 hardwareActionFor(keyCode)?.let { service.karooSystem.dispatch(it) }
             }
+            created.onSetFocusable = { focusable -> applyFocusable(focusable) }
         } else {
             current.update(state, settings, imperial, sysValues)
             applyLayoutIfChanged(current, settings)
@@ -90,6 +97,7 @@ class OverlayController(private val service: ClimberExtension) {
             runCatching { windowManager.removeView(it) }
             view = null
         }
+        forcedNonFocusable = false
         appliedParams = null
         lastHasActive = false
         fieldsVisible.value = false
@@ -100,6 +108,18 @@ class OverlayController(private val service: ClimberExtension) {
     private fun refreshFieldsVisible() {
         fieldsVisible.value =
             view?.panelSize == ViewModeMachine.PanelSize.FULL && lastHasActive
+    }
+
+    /**
+     * Toggle key-focusability without changing panel size, so the drawer can briefly
+     * hand focus back to Karoo's RideActivity while a replayed hardware press is
+     * delivered, then re-take it for the bottom-left collapse.
+     */
+    private fun applyFocusable(focusable: Boolean) {
+        val v = view ?: return
+        if (!v.isAttachedToWindow) return
+        forcedNonFocusable = !focusable
+        lastSettings?.let { applyLayoutIfChanged(v, it) }
     }
 
     /** Re-apply layout params (panel size switch, settings change). */
@@ -159,7 +179,7 @@ class OverlayController(private val service: ClimberExtension) {
         // the chip stays non-focusable so hardware buttons keep their native actions;
         // bigger panels take key focus so the bottom-left button collapses them
         val focusFlag =
-            if (size == ViewModeMachine.PanelSize.CHIP) {
+            if (size == ViewModeMachine.PanelSize.CHIP || forcedNonFocusable) {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
             } else {
                 0

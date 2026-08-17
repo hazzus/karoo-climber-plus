@@ -18,20 +18,16 @@ data class RouteData(
     val climbs: List<ClimbData>,
     /** Identity key to detect route changes. */
     val routeKey: String,
+    /**
+     * True while a reroute is active (Karoo's `rejoinDistance` is set). During a reroute
+     * the climbs list is re-based to distances AHEAD of the rider (not absolute route
+     * positions) and the fixed elevation profile no longer lines up — see [ClimbStateBuilder].
+     */
+    val rerouting: Boolean = false,
 ) {
     /** Best-known total distance for progress computation. */
     val totalDistance: Double? get() = routeDistance ?: profile?.totalDistance
 }
-
-/**
- * A climb on this ride's list. Done entries keep the data recorded when the
- * rider topped them — a reroute may have re-based route coordinates since, so
- * their distances must not be compared against current progress.
- */
-data class ClimbEntry(
-    val climb: ClimbData,
-    val done: Boolean,
-)
 
 /** What the overlay should show right now. */
 sealed interface ClimbUiState {
@@ -40,27 +36,36 @@ sealed interface ClimbUiState {
 
     /** A route is loaded; the chip is always present. */
     data class Shown(
-        /** Topped climbs first (frozen data), then climbs still ahead, route order. */
-        val climbs: List<ClimbEntry>,
+        /** Climbs still ahead of the rider, route order. */
+        val climbs: List<ClimbData>,
         /** Rider's distance along the route, meters. */
         val progress: Double,
         /** Whole-route profile (may be null when Karoo didn't send one). */
         val profile: ElevationProfile?,
-        /** Set while approaching or on a climb (within the trigger window). */
+        /** Set while approaching or on a climb. */
         val active: ActiveClimb?,
+        /** Climbs already completed this ride, in completion order. */
+        val completed: List<CompletedClimb> = emptyList(),
+        /** Live-traced real silhouette of the ridden portion of the active climb, in the
+         *  active climb's coordinate frame (climb.startDistance..climb.endDistance, elevation
+         *  measured from the climb bottom = 0). Non-null only when [profile] is null (wedge
+         *  climb) and we've observed >=1 real elevation-from-bottom sample. */
+        val tracedProfile: ElevationProfile? = null,
+        /** True during a reroute: the climbs are in a rebased frame with no reliable mapping to
+         *  the route profile, so an upcoming climb's preview is unavailable (see the view). */
+        val rerouting: Boolean = false,
     ) : ClimbUiState {
-        val completedCount: Int get() = climbs.count { it.done }
-        val totalCount: Int get() = climbs.size
-
         /** Climbs not yet started, in route order. */
         val upcoming: List<ClimbData>
-            get() = climbs.filter { !it.done && progress < it.climb.startDistance }.map { it.climb }
+            get() = climbs.filter { progress < it.startDistance }
     }
 
     data class ActiveClimb(
         val climb: ClimbData,
-        /** Position in [Shown.climbs] (0-based), i.e. counts completed climbs too. */
+        /** 0-based climb position for the "n/total" field (number = index + 1). */
         val index: Int,
+        /** Total climbs on the route (from the CLIMB stream); null when only the ahead list is known. */
+        val total: Int?,
         /** Meters until the climb starts; 0 while on the climb. */
         val distanceToStart: Double,
         /** Meters until the top of the climb (includes approach). */
